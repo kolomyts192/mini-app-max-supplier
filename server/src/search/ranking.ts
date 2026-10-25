@@ -81,7 +81,7 @@ const BASIS_SCORE: Record<ProductBasis, number> = {
  * Поправка на характеристики запроса: все подтверждены — без изменений, часть — ×0,95, не указаны — ×0,9,
  * противоречат — ×0,7. Компанию без подтверждения не исключаем: в источниках характеристики указаны редко.
  */
-export function attributeFactor(checks: DerivedFacts['attributeChecks']): number {
+export function attributeFactor(checks: Pick<DerivedFacts['attributeChecks'][number], 'status'>[]): number {
   if (!checks.length) return 1;
   if (checks.some((c) => c.status === 'mismatch')) return 0.7;
   const confirmed = checks.filter((c) => c.status === 'confirmed').length;
@@ -157,6 +157,7 @@ export function buildReasons(s: SupplierRow, f: DerivedFacts, q: SearchQuery, ca
   else if (f.regionMatch === 'other') reasons.push({ kind: 'warn', text: `другой регион: ${region?.name ?? s.region_name}` });
 
   if (s.supplier_type === 'UNKNOWN') reasons.push({ kind: 'warn', text: 'тип поставщика не определён: одного ОКВЭД недостаточно' });
+  else if (s.supplier_type_basis?.startsWith('компания указана изготовителем')) reasons.push({ kind: 'ok', text: `тип поставщика: производитель — ${s.supplier_type_basis}` });
   else if (f.productBasis === 'declared') reasons.push({ kind: 'warn', text: 'производитель по заявлению компании в реестре МСП — документами не подтверждено' });
   else reasons.push({ kind: 'ok', text: `тип поставщика: ${SUPPLIER_TYPE_LABEL[s.supplier_type].toLowerCase()}` });
 
@@ -185,7 +186,7 @@ export function buildReasons(s: SupplierRow, f: DerivedFacts, q: SearchQuery, ca
     const kind = d.row.document_type === 'DECLARATION' ? 'декларация' : 'сертификат';
     reasons.push({
       kind: d.isOfficiallyVerified ? 'ok' : 'warn',
-      text: d.isOfficiallyVerified ? `действующая ${kind} на товар` : `${kind} на товар — по данным тестовой базы, требует проверки в реестре Росаккредитации`,
+      text: d.isOfficiallyVerified ? `${kind === 'декларация' ? 'действующая декларация' : 'действующий сертификат'} на товар` : `${kind} на товар — по данным тестовой базы, требует проверки в реестре Росаккредитации`,
     });
   } else if (relevant.length) {
     reasons.push({ kind: 'warn', text: `документ на товар найден, но ${relevant[0].statusLabel.toLowerCase()}` });

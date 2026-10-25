@@ -1,4 +1,4 @@
-import { BookmarkPlus, X } from 'lucide-react';
+import { BookmarkPlus, Send, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError, api, NetworkError } from '../api/client';
@@ -6,6 +6,7 @@ import type { CompareResponse, CompareSupplier } from '../api/types';
 import { EMPTY_QUERY } from '../api/types';
 import { haptic } from '../bridge';
 import { RoleBadge } from '../components/SupplierCard';
+import { QuoteSheet } from '../components/sheets';
 import { Button, CardSkeleton, ICON_S, IconButton, Notice, StateView, StickyActionBar } from '../components/ui';
 import { decodeQuery, encodeQuery, useApp } from '../store';
 import { formatDate, softHyphens } from '../utils';
@@ -27,15 +28,26 @@ const ROWS: { label: string; render: (s: CompareSupplier) => React.ReactNode }[]
   { label: 'ГИСП', render: (s) => (s.gisp.found ? `найдено: ${s.gisp.records}${s.gisp.pp719 ? ', ПП РФ №719' : ''}` : 'не найдено') },
   {
     label: 'Документы',
-    render: (s) =>
-      s.documents.items.length
-        ? s.documents.items.map((d) => (
-            <div key={d.number} style={{ marginBottom: 4 }}>
-              {d.type === 'DECLARATION' ? 'Декларация' : 'Сертификат'}: {d.statusLabel.toLowerCase()}
-              {d.match === 'other' ? ', на другой товар' : ''}
-            </div>
-          ))
-        : 'не найдены',
+    render: (s) => {
+      const { total, active, relevantActive, items } = s.documents;
+      if (!total && !items.length) return 'не найдены';
+      const certs = items.filter((d) => d.type === 'CERTIFICATE').length;
+      const decls = items.filter((d) => d.type === 'DECLARATION').length;
+      return (
+        <>
+          <div style={{ fontWeight: 600, color: relevantActive ? 'var(--success)' : 'var(--warning)' }}>
+            {relevantActive ? `На этот товар действует: ${relevantActive}` : 'На этот товар действующих нет'}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            Всего найдено {total}, из них действует {active}
+          </div>
+          <div className="t-caption muted" style={{ marginTop: 4 }}>
+            {[certs && `сертификатов: ${certs}`, decls && `деклараций: ${decls}`].filter(Boolean).join(', ')}
+            {' · список — в карточке'}
+          </div>
+        </>
+      );
+    },
   },
   { label: 'Риск-сигналы', render: (s) => (s.risks.length ? <span style={{ color: 'var(--danger)' }}>{s.risks.map((r) => r.title).join('; ')}</span> : 'не найдены') },
   { label: 'Дата проверки', render: (s) => <span className="num">{formatDate(s.checkedAt)}</span> },
@@ -53,6 +65,7 @@ export function CompareScreen() {
   const [data, setData] = useState<CompareResponse | null>(null);
   const [error, setError] = useState<'offline' | 'error' | null>(null);
   const [saving, setSaving] = useState(false);
+  const [quoteOpen, setQuoteOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -171,10 +184,21 @@ export function CompareScreen() {
         Цена, наличие и сроки поставки не сравниваются: эти сведения не подтверждены источниками.
       </p>
       <StickyActionBar>
+        <Button variant="secondary" block icon={<Send size={20} strokeWidth={2} aria-hidden />} onClick={() => setQuoteOpen(true)}>
+          Запрос КП
+        </Button>
         <Button block loading={saving} icon={<BookmarkPlus size={20} strokeWidth={2} aria-hidden />} onClick={save}>
-          Сохранить как подборку
+          Сохранить
         </Button>
       </StickyActionBar>
+
+      <QuoteSheet
+        suppliers={quoteOpen ? data.suppliers.map((x) => ({ id: x.id, name: x.name })) : []}
+        query={query ?? { ...EMPTY_QUERY, text: data.suppliers[0]?.product.titles[0] ?? '' }}
+        searchId={lastSearchId}
+        source="compare"
+        onClose={() => setQuoteOpen(false)}
+      />
     </div>
   );
 }

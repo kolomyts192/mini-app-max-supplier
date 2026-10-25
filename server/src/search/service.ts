@@ -15,9 +15,12 @@ import type { AiStepStatus, EmptyAction, FinancialsDto, SearchDates, SearchRespo
 import { attributeLabel } from './attributes';
 import { deriveFacts } from './facts';
 import { applyInterpretation, type InterpretationStatus, type QueryInterpreter } from './interpretation';
-import type { Coverage, Evidence, SupplierRow } from './model';
+import { type Coverage, type Evidence, OFFICIAL_ONLY_BY_ACCESS, type SupplierRow } from './model';
 import { rowProvenance, toCard, toSummary } from './present';
-import { buildReasons, hardFilter, scoreSupplier, WEIGHTS } from './ranking';
+import { summarizeCoverage } from './coverage';
+import { withDocumentManufacturer } from './manufacturer';
+import { ResultOrder } from './order';
+import { attributeFactor, buildReasons, hardFilter, scoreSupplier, WEIGHTS } from './ranking';
 import { TermMatcher } from './terms';
 import type { DataMode, SupplierRepository } from './repository';
 import type { SupplierResolver } from './resolver';
@@ -36,10 +39,14 @@ export const MAX_RESULTS = 5;
 /** Оценка ИИ 0–3 → компонент «совпадение товара». */
 const AI_PRODUCT_SCORE = [0.3, 0.5, 0.8, 1] as const;
 
-/** Применяет проверенную оценку ИИ: компонент «совпадение товара» — среднее правил и ИИ, плюс объяснение. */
+/**
+ * Применяет проверенную оценку ИИ: компонент «совпадение товара» — среднее правил и ИИ, плюс объяснение.
+ * ИИ судит только о товаре, поэтому поправка на характеристики (их сверяют правила) применяется и к его оценке.
+ */
 export function withVerdict(s: SupplierSummary, v: RelevanceVerdict): SupplierSummary {
   const rules = s.scoreComponents.productMatch ?? 0;
-  const productMatch = Math.round(((rules + AI_PRODUCT_SCORE[v.relevance]) / 2) * 1000) / 1000;
+  const ai = AI_PRODUCT_SCORE[v.relevance] * attributeFactor(s.match.attributes);
+  const productMatch = Math.round(((rules + ai) / 2) * 1000) / 1000;
   const score = Math.round((s.score + WEIGHTS.productMatch * (productMatch - rules)) * 1000) / 1000;
   const reasons = [...s.reasons];
   reasons.splice(1, 0, { kind: v.relevance >= 2 ? 'ok' : 'warn', text: `оценка ИИ: ${v.reason}`, source: 'ai' });
@@ -95,8 +102,16 @@ export class SearchService {
     this.now = d.now ?? (() => new Date());
   }
 
+  private modeOverride: DataMode | null = null;
+
+  /** База официальных данных пуста (импорт ещё не запускали): ищем по тестовой базе с пометкой «Демо», а не отдаём пустую выдачу. */
+  useDemoData(): void {
+    this.modeOverride = 'test';
+    this.importsCache = null;
+  }
+
   get dataMode(): DataMode {
-    return this.d.dataMode ?? 'all';
+    return this.modeOverride ?? this.d.dataMode ?? 'all';
   }
 
   /** Загруженные наборы открытых данных (кэш 5 минут). */
@@ -111,6 +126,20 @@ export class SearchService {
   private async coverage(): Promise<Coverage> {
     const imports = await this.imports();
     return new Set([...imports.map((i) => i.source), ...this.d.sources.officialLive]);
+  }
+
+  /**
+   * Состояние источников без самообмана: у реальных компаний источник считается работающим, только если по нему есть
+   * загруженный набор или живой доступ. Снимок ручной тестовой базы «UP» для ГИСП, РНП или ЕФРСБ не означает.
+   */
+  async sourceHealth() {
+    const [all, covered] = await Promise.all([this.d.sources.health(), this.coverage()]);
+    if (this.dataMode !== 'real') return all;
+    return all.map((h) =>
+      OFFICIAL_ONLY_BY_ACCESS.includes(h.id) && !covered?.has(h.id)
+        ? { ...h, state: 'NOT_CONFIGURED' as const, details: 'Не подключён: нет загруженных данных и доступа к источнику' }
+        : h,
+    );
   }
 
   private officialWarnings(results: SupplierSummary[], q: SearchQuery | null, imports: OpenDataImport[]): string[] {
@@ -131,7 +160,8 @@ export class SearchService {
   }
 
   /** Факты, жёсткие фильтры и оценка по одной компании. null — компания исключена (причина в exclusions). */
-  private evaluate(s: SupplierRow, ev: Evidence, q: SearchQuery, coverage: Coverage, now: Date, exclusions: Record<string, number>): SupplierSummary | null {
+  private evaluate(row: SupplierRow, ev: Evidence, q: SearchQuery, coverage: Coverage, now: Date, exclusions: Record<string, number>): SupplierSummary | null {
+    const s = withDocumentManufacturer(row, ev);
     const f = deriveFacts(s, ev, q, this.d.catalog, now, this.d.demoTrustManual, coverage);
     const hf = hardFilter(s, f, q, this.d.catalog);
     if (hf.excluded) {
@@ -145,7 +175,7 @@ export class SearchService {
    * ЕГРЮЛ для лучших кандидатов: запрашиваем, пересчитываем их с обновлёнными сведениями
    * (ликвидированные отсеются жёстким фильтром) и заново сортируем выдачу.
    */
-  private async withEgrul(passed: SupplierSummary[], q: SearchQuery, coverage: Coverage, now: Date, exclusions: Record<string, number>): Promise<SupplierSummary[]> {
+  private async withEgrul(passed: SupplierSummary[], q: SearchQuery, coverage: Coverage, now: Date, exclusions: Record<string, number>, order: ResultOrder): Promise<SupplierSummary[]> {
     const egrul = this.d.egrul;
     if (!egrul?.enabled) return passed;
     const top = passed.slice(0, this.d.egrulTop ?? 10).filter((r) => !r.isManualTestData);
@@ -157,7 +187,7 @@ export class SearchService {
     return passed
       .map((p) => (updated.has(p.id) ? updated.get(p.id)! : p))
       .filter((p): p is SupplierSummary => !!p)
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
+      .sort(order.compare);
   }
 
   /**
@@ -165,7 +195,7 @@ export class SearchService {
    * (среднее оценки правил и оценки ИИ), остальные компоненты формулы ТЗ не меняются, никто не исключается.
    * Предпросмотр в боте (нужно только число) и запрос по одной категории без товара ИИ не оценивает.
    */
-  private async withAiJudge(passed: SupplierSummary[], rows: SupplierRow[], q: SearchQuery, ctx: SearchContext): Promise<{ list: SupplierSummary[]; status: AiStepStatus }> {
+  private async withAiJudge(passed: SupplierSummary[], rows: SupplierRow[], q: SearchQuery, ctx: SearchContext, order: ResultOrder): Promise<{ list: SupplierSummary[]; status: AiStepStatus }> {
     if (ctx.track === false) return { list: passed, status: 'skipped' };
     if (!this.d.judge.enabled) return { list: passed, status: 'disabled' };
     if (!q.productId && !q.attributes?.length && !q.terms?.length) return { list: passed, status: 'skipped' };
@@ -178,7 +208,7 @@ export class SearchService {
         const v = verdicts.get(s.id);
         return v ? withVerdict(s, v) : s;
       })
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
+      .sort(order.compare);
     return { list, status };
   }
 
@@ -267,7 +297,7 @@ export class SearchService {
     const q = this.normalizeQuery(interpreted.query);
     const searchId = crypto.randomUUID();
     const ai: SearchResponse['ai'] = { interpretation: interpreted.status, ranking: 'skipped' };
-    const base = { searchId, query: q, queryLabel: this.describe(q), activeFilters: this.activeFilters(q), demo: false, ai };
+    const base = { searchId, query: q, queryLabel: this.describe(q), activeFilters: this.activeFilters(q), demo: false, ai, coverage: summarizeCoverage(this.dataMode === 'real' ? await this.coverage() : null) };
 
     if (!q.categoryId) {
       const similar = matchProduct(q.text, this.d.catalog);
@@ -331,12 +361,15 @@ export class SearchService {
       const summary = this.evaluate(s, evidence[s.inn], q, coverage, now, exclusions);
       if (summary) passed.push(summary);
     }
-    passed.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
-    passed = await this.withEgrul(passed, q, coverage, now, exclusions);
-    const judged = await this.withAiJudge(passed, candidates, q, ctx);
+    const order = new ResultOrder(candidates);
+    passed.sort(order.compare);
+    passed = await this.withEgrul(passed, q, coverage, now, exclusions, order);
+    // ИИ оценивает кандидатов только когда правила не справились: товар узнал ИИ или выдача неполная
+    const rulesSufficient = ['skipped', 'disabled'].includes(interpreted.status) && passed.length >= MAX_RESULTS;
+    const judged = rulesSufficient ? { list: passed, status: 'skipped' as AiStepStatus } : await this.withAiJudge(passed, candidates, q, ctx, order);
     passed = judged.list;
     ai.ranking = judged.status;
-    const results = passed.slice(0, MAX_RESULTS);
+    const results = ResultOrder.withoutClones(passed).slice(0, MAX_RESULTS);
     const dataDate = results.map((r) => r.checkedAt).sort().at(-1) ?? null;
     const latencyMs = Date.now() - started;
     stopTimer();
@@ -427,8 +460,9 @@ export class SearchService {
     );
     const coverage = await this.coverage();
     const effective: SearchQuery = q ?? searchQuerySchema.parse({});
-    const items = rows.map((s) => {
-      const ev = evidence[s.inn];
+    const items = rows.map((row) => {
+      const ev = evidence[row.inn];
+      const s = withDocumentManufacturer(row, ev);
       const qq = effective.categoryId ? effective : { ...effective, categoryId: s.products[0]?.category_id ?? null };
       const f = deriveFacts(s, ev, qq, this.d.catalog, now, this.d.demoTrustManual, coverage);
       const scored = scoreSupplier(s, f, qq, now);
@@ -448,7 +482,7 @@ export class SearchService {
     const catId = it.qq.categoryId ?? s.products[0]?.category_id;
     const req = catId ? await this.d.sources.call(this.d.sources.requirements, { categoryId: catId }) : null;
     const card = toCard({
-      s,
+      s: it.s,
       ev: it.ev,
       f: it.f,
       summary: it.summary,

@@ -146,6 +146,19 @@
 
 .action-bar__main {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Несколько кнопок в панели: делят ширину поровну, подпись в одну строку */
+.action-bar__main > .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-inline: 10px;
+  gap: 8px;
+  font-size: 15px;
+  white-space: nowrap;
 }
 
 /* ── Chip ────────────────────────────────────────────────────────────────── */
@@ -545,9 +558,13 @@ textarea.input {
 }
 
 .hero .input {
-  background: var(--surface);
+  background: #ffffff;
   color: #0e1621;
   box-shadow: none;
+}
+
+.hero .input::placeholder {
+  color: #858a9c;
 }
 
 .hero .input:focus {
@@ -661,8 +678,8 @@ textarea.input {
 }
 
 .card--ink {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--inverse);
+  color: var(--on-inverse);
 }
 
 .supplier-card {
@@ -714,28 +731,37 @@ textarea.input {
 
 .supplier-card__actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-1);
   margin: var(--space-5) calc(-1 * var(--space-2)) calc(-1 * var(--space-3));
   border-top: 1px solid var(--hairline);
   padding-top: var(--space-2);
 }
 
+/* Иконка всегда на одной высоте, подпись — в одну строку */
 .card-action {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
+  min-width: 0;
   min-height: 52px;
   padding: 6px 2px;
   border: 0;
   border-radius: var(--radius-s);
   background: transparent;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 16px;
   font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.card-action > svg {
+  flex: none;
 }
 
 .card-action--active {
@@ -1097,13 +1123,13 @@ textarea.input {
   gap: var(--space-3);
   padding: 8px 8px 8px var(--space-5);
   border-radius: var(--radius-m);
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--inverse);
+  color: var(--on-inverse);
   animation: fade-in var(--dur) var(--ease);
 }
 
 .float-bar .btn--secondary {
-  background: var(--paper);
+  background: #f4f2ff;
   color: #0e1621;
   box-shadow: none;
 }
@@ -1659,8 +1685,8 @@ textarea.input {
   border: 0;
   text-align: left;
   border-radius: var(--radius-l);
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--inverse);
+  color: var(--on-inverse);
   padding: var(--space-6);
 }
 
@@ -1696,4 +1722,36 @@ textarea.input {
   padding-left: 10px;
   border-left: 2px solid var(--border);
   color: var(--text-secondary);
+}
+
+/* Свёрнутые разделы карточки поставщика */
+.section--collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+}
+.section--collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+.section--collapsible > summary::after {
+  content: '＋';
+  font-size: 18px;
+  color: var(--ink-2);
+}
+.section--collapsible[open] > summary {
+  margin-bottom: var(--space-5);
+}
+.section--collapsible[open] > summary::after {
+  content: '−';
+}
+
+/* Длинный перечень названий продукции в карточке выдачи — не больше трёх строк */
+.supplier-card__titles {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

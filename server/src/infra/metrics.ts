@@ -62,7 +62,7 @@ export const llmRequests = new client.Counter({
 
 export const llmTokens = new client.Counter({
   name: 'pp_llm_tokens_total',
-  help: 'Токены языковой модели: prompt — запрос, completion — ответ',
+  help: 'Токены языковой модели: prompt — запрос, completion — ответ, precached — часть запроса из кэша модели',
   labelNames: ['purpose', 'kind'],
   registers: [registry],
 });

@@ -1,4 +1,4 @@
-import { AlertTriangle, BadgeCheck, Bookmark, BookmarkCheck, Building2, CheckCircle2, ChevronDown, ChevronUp, Factory, FileCheck2, FileSearch, OctagonX, Scale, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Bookmark, BookmarkCheck, Building2, CheckCircle2, ChevronDown, ChevronUp, Factory, FileCheck2, FileSearch, OctagonX, Scale, Send, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import type { AttributeStatus, SupplierSummary, SupplierType } from '../api/types';
 import { formatDate } from '../utils';
@@ -110,11 +110,12 @@ interface Props {
   onSave?: () => void;
   saved?: boolean;
   onSources?: () => void;
+  onQuote?: () => void;
   reasonsOpen?: boolean;
 }
 
 /** Карточка результата (ТЗ 7.2): тип, регион, товар, статус деятельности, МСП, ГИСП, документы, дата проверки. */
-export function SupplierCard({ s, onOpen, onCompare, inCompare, onSave, saved, onSources, reasonsOpen = false }: Props) {
+export function SupplierCard({ s, onOpen, onCompare, inCompare, onSave, saved, onSources, onQuote, reasonsOpen = false }: Props) {
   const [open, setOpen] = useState(reasonsOpen);
   const regionNote = REGION_NOTE[s.regionMatch];
   const warnCount = s.reasons.filter((r) => r.kind === 'warn').length;
@@ -138,7 +139,7 @@ export function SupplierCard({ s, onOpen, onCompare, inCompare, onSave, saved, o
       <div className="stack-2" style={{ marginTop: 10 }}>
         <LegalStatusLine s={s} />
         {s.product.titles.length > 0 && (
-          <div className="t-caption">
+          <div className="t-caption supplier-card__titles">
             <span className="muted">Товар: </span>
             {s.product.titles.slice(0, 2).join('; ')}
             {s.product.titles.length > 2 ? ` и ещё ${s.product.titles.length - 2}` : ''}
@@ -176,13 +177,19 @@ export function SupplierCard({ s, onOpen, onCompare, inCompare, onSave, saved, o
         {onCompare && (
           <button type="button" className={`card-action ${inCompare ? 'card-action--active' : ''}`} onClick={onCompare} aria-pressed={inCompare}>
             <Scale size={20} strokeWidth={1.75} aria-hidden />
-            {inCompare ? 'В сравнении' : 'Сравнить'}
+            {inCompare ? 'В списке' : 'Сравнить'}
           </button>
         )}
         {onSave && (
           <button type="button" className={`card-action ${saved ? 'card-action--active' : ''}`} onClick={onSave} aria-pressed={saved} aria-label={saved ? 'Убрать из сохранённых' : 'Сохранить поставщика'}>
             {saved ? <BookmarkCheck size={20} strokeWidth={1.75} aria-hidden /> : <Bookmark size={20} strokeWidth={1.75} aria-hidden />}
             {saved ? 'Сохранено' : 'Сохранить'}
+          </button>
+        )}
+        {onQuote && (
+          <button type="button" className="card-action" onClick={onQuote}>
+            <Send size={20} strokeWidth={1.75} aria-hidden />
+            Запрос КП
           </button>
         )}
         {onSources && (

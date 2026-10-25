@@ -1,7 +1,7 @@
 import { llmLatency, llmRequests, llmTokens } from '../../infra/metrics';
 import type { Logger } from '../../logger';
 import { CircuitBreaker, CircuitOpenError, sleep } from '../../sources/resilience';
-import { type LlmCall, type LlmClient, type LlmResult, LlmUnavailableError } from '../llm';
+import { type LlmCall, type LlmClient, type LlmPurpose, type LlmResult, LlmUnavailableError } from '../llm';
 import { Semaphore } from '../semaphore';
 import type { GigaChatTokenProvider } from './tokenProvider';
 
@@ -14,7 +14,7 @@ export interface GigaChatConfig {
 interface ChatResponse {
   model?: string;
   choices?: { message?: { content?: string; function_call?: { name?: string; arguments?: unknown } }; finish_reason?: string }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; precached_prompt_tokens?: number };
 }
 
 /** Ответ на повтор: 429 — превышен лимит, 5xx — временная ошибка сервиса. */
@@ -23,12 +23,13 @@ const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 /**
  * Клиент GigaChat API: chat/completions с обязательным вызовом функции. Отвечает за токен, число потоков
  * (физлицу — один), сроки, повторы при 429/5xx и circuit breaker: после серии сбоев поиск какое-то время
- * не ждёт модель и сразу работает без ИИ.
+ * не ждёт модель и сразу работает без ИИ. Breaker свой у каждого назначения: медленная оценка кандидатов
+ * не отключает разбор запроса.
  */
 export class GigaChatClient implements LlmClient {
   readonly enabled = true;
   private readonly slots: Semaphore;
-  private readonly breaker = new CircuitBreaker('GigaChat', 3, 60_000);
+  private readonly breakers = new Map<LlmPurpose, CircuitBreaker>();
 
   constructor(
     private readonly tokens: GigaChatTokenProvider,
@@ -49,11 +50,13 @@ export class GigaChatClient implements LlmClient {
       throw new LlmUnavailableError('busy', 'GigaChat занят другими запросами (лимит потоков)');
     }
     try {
-      const result = await this.breaker.exec(() => this.request(call, deadline));
+      const result = await this.breaker(call.purpose).exec(() => this.request(call, deadline));
+      const { usage } = result;
       llmRequests.inc({ purpose: call.purpose, outcome: 'ok' });
-      llmTokens.inc({ purpose: call.purpose, kind: 'prompt' }, result.usage.prompt);
-      llmTokens.inc({ purpose: call.purpose, kind: 'completion' }, result.usage.completion);
-      this.log.info({ purpose: call.purpose, model: result.model, tokens: result.usage.total, ms: Date.now() - started }, 'gigachat call');
+      llmTokens.inc({ purpose: call.purpose, kind: 'prompt' }, usage.prompt);
+      llmTokens.inc({ purpose: call.purpose, kind: 'completion' }, usage.completion);
+      llmTokens.inc({ purpose: call.purpose, kind: 'precached' }, usage.precached);
+      this.log.info({ purpose: call.purpose, model: result.model, tokens: usage.total, precached: usage.precached, ms: Date.now() - started }, 'gigachat call');
       return result;
     } catch (err) {
       const e = err instanceof CircuitOpenError ? new LlmUnavailableError('unavailable', err.message) : err;
@@ -65,6 +68,12 @@ export class GigaChatClient implements LlmClient {
       release();
       stop();
     }
+  }
+
+  private breaker(purpose: LlmPurpose): CircuitBreaker {
+    let breaker = this.breakers.get(purpose);
+    if (!breaker) this.breakers.set(purpose, (breaker = new CircuitBreaker(`GigaChat (${purpose})`, 3, 60_000)));
+    return breaker;
   }
 
   private async request(call: LlmCall, deadline: number): Promise<LlmResult> {
@@ -121,7 +130,10 @@ export class GigaChatClient implements LlmClient {
 
   private parse(data: ChatResponse, call: LlmCall): LlmResult {
     const fc = data.choices?.[0]?.message?.function_call;
-    if (!fc || fc.name !== call.fn.name) throw new LlmUnavailableError('invalid', `GigaChat не вызвал функцию ${call.fn.name}`);
+    if (!fc || fc.name !== call.fn.name) {
+      const choice = data.choices?.[0];
+      throw new LlmUnavailableError('invalid', `GigaChat не вызвал функцию ${call.fn.name} (finish_reason: ${choice?.finish_reason ?? '—'}): ${(choice?.message?.content ?? '').slice(0, 160)}`);
+    }
     let args = fc.arguments;
     if (typeof args === 'string') {
       try {
@@ -134,7 +146,12 @@ export class GigaChatClient implements LlmClient {
     return {
       args,
       model: data.model ?? this.cfg.model,
-      usage: { prompt: u.prompt_tokens ?? 0, completion: u.completion_tokens ?? 0, total: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0) },
+      usage: {
+        prompt: u.prompt_tokens ?? 0,
+        completion: u.completion_tokens ?? 0,
+        total: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
+        precached: u.precached_prompt_tokens ?? 0,
+      },
     };
   }
 }

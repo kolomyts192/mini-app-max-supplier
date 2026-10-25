@@ -315,7 +315,7 @@ export function SearchScreen() {
               />
             )}
             <Toggle checked={form.certificate === 'REQUIRED'} onChange={(v) => setForm({ certificate: v ? 'REQUIRED' : 'PREFERRED' })} label="Нужны документы" hint="Действующая декларация или сертификат на товар" />
-            {(!category || category.industrial) && (
+            {(!realData || connected.has('GISP_PP719') || connected.has('GISP')) && (!category || category.industrial) && (
               <Toggle checked={form.russianOnly} onChange={(v) => setForm({ russianOnly: v })} label="Российская продукция" hint="Реестр промышленной продукции ГИСП, ПП РФ №719" />
             )}
           </div>

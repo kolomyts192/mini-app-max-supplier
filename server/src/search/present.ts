@@ -203,7 +203,16 @@ export function toCard(args: {
 
   const allProducts = [...(ev.gisp ?? [])];
   const gispIds = new Set(allProducts.map((p) => p.id));
-  const productCards = s.products.map((p) => {
+  // Один и тот же вид деятельности из ОКВЭД привязан к нескольким товарам справочника: показываем его один раз
+  const seenProducts = new Set<string>();
+  const distinctProducts = s.products.filter((p) => {
+    const key = `${p.category_id}|${p.origin ?? ''}|${p.title}`;
+    if (p.product_id && p.characteristics?.basis !== 'okved' && !p.characteristics?.okved) return true;
+    if (seenProducts.has(key)) return false;
+    seenProducts.add(key);
+    return true;
+  });
+  const productCards = distinctProducts.map((p) => {
     const gisp = allProducts.find((g) => g.product_id === p.product_id && g.category_id === p.category_id);
     const pp = (ev.pp719 ?? []).find((g) => g.product_id === p.product_id);
     return {

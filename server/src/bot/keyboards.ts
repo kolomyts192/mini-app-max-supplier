@@ -16,6 +16,9 @@ export const CB = {
   NEW_SEARCH: 'NEW_SEARCH',
   APPLY_PATCH: 'APPLY_PATCH',
   SKIP_ATTRIBUTES: 'SKIP_ATTRIBUTES',
+  EXAMPLE: 'EXAMPLE',
+  QUOTE: 'QUOTE',
+  QUOTE_ANSWER: 'QUOTE_ANSWER',
 } as const;
 
 export const cb = (text: string, action: string, arg?: string, intent?: 'default' | 'positive' | 'negative'): Button => ({
@@ -35,7 +38,7 @@ export function openAppButton(text: string, opts: { mode: 'link' | 'open_app'; b
 }
 
 export function mainMenu(open: Button | null): InlineKeyboard {
-  const rows: Button[][] = [[cb('Найти поставщика', CB.NEW_SEARCH, undefined, 'positive')], [cb('Сохранённые подборки', CB.VIEW_SAVED)]];
+  const rows: Button[][] = [[cb('Найти поставщика', CB.NEW_SEARCH, undefined, 'positive')], [cb('Пример запроса', CB.EXAMPLE)], [cb('Сохранённые подборки', CB.VIEW_SAVED)]];
   if (open) rows.push([open]);
   return keyboard(rows);
 }
@@ -95,9 +98,10 @@ export function volumeKeyboard(): InlineKeyboard {
   return keyboard([[cb('Не важно', CB.SET_VOLUME, 'none')]]);
 }
 
-export function readyKeyboard(open: Button | null): InlineKeyboard {
+export function readyKeyboard(open: Button | null, token?: string): InlineKeyboard {
   const rows: Button[][] = [];
   if (open) rows.push([open]);
+  rows.push([cb('Запросить КП у трёх лучших', CB.QUOTE, token, 'positive')]);
   rows.push([cb('Новый поиск', CB.NEW_SEARCH)]);
   return keyboard(rows);
 }

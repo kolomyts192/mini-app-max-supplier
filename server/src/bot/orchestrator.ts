@@ -17,7 +17,9 @@ import type { Interpretation, QueryInterpreter, RuleQueryInterpreter } from '../
 import type { SearchService } from '../search/service';
 import type { AnalyticsService } from '../services/analytics';
 import type { SavedService } from '../services/saved';
+import type { DueFollowUp, QuoteService } from '../services/quote';
 import type { SearchTokenService } from '../services/searchToken';
+import type { SearchResponse } from '../search/dto';
 import {
   attributesKeyboard,
   CB,
@@ -35,7 +37,7 @@ import {
   volumeKeyboard,
 } from './keyboards';
 import type { BotSession, SessionStore } from './session';
-import { querySummary, T } from './texts';
+import { querySummary, selectionText, sourcesLine, T } from './texts';
 
 export interface BotTransport {
   send(to: { userId?: number; chatId?: number }, body: NewMessageBody): Promise<void>;
@@ -43,6 +45,7 @@ export interface BotTransport {
 }
 
 export interface BotDeps {
+  quotes: QuoteService;
   sessions: SessionStore;
   catalog: Catalog;
   tokens: SearchTokenService;
@@ -66,6 +69,9 @@ interface Ctx {
 }
 
 const MAX_CLARIFICATIONS = 3;
+
+/** Пример для кнопки «Пример запроса»: сценарий проходится без набора текста. */
+const EXAMPLE_QUERY = 'Нужна фанера ФСФ 18 мм в Татарстане, только производитель';
 
 /** Dialog Orchestrator: свободный запрос → короткое уточнение → открытие mini-app. */
 export class BotOrchestrator {
@@ -135,7 +141,8 @@ export class BotOrchestrator {
   private async onStart(ctx: Ctx): Promise<void> {
     await this.d.sessions.reset(String(ctx.userId), ctx.chatId ? String(ctx.chatId) : null);
     const notice = this.d.search.dataMode === 'test' ? T.demoNotice : T.realNotice;
-    await this.send(ctx, `${T.greeting}\n\n${notice}`, mainMenu(this.open()));
+    const sources = this.d.search.dataMode === 'test' ? '' : sourcesLine(await this.d.search.imports());
+    await this.send(ctx, [T.greeting, notice, sources].filter(Boolean).join('\n\n'), mainMenu(this.open()));
   }
 
   private async onMessage(ctx: Ctx, rawText: string): Promise<void> {
@@ -220,6 +227,15 @@ export class BotOrchestrator {
       case CB.NEW_SEARCH:
         await this.ack(ctx, 'Новый поиск');
         return this.startSearch(ctx);
+      case CB.EXAMPLE:
+        await this.ack(ctx, 'Пример запроса');
+        await this.send(ctx, `Пример запроса: «${EXAMPLE_QUERY}»`);
+        return this.newQuery(ctx, EXAMPLE_QUERY);
+      case CB.QUOTE:
+        await this.ack(ctx, 'Запросить КП');
+        return this.sendQuoteRequests(ctx, s, arg);
+      case CB.QUOTE_ANSWER:
+        return this.onQuoteAnswer(ctx, arg ?? '');
       case CB.VIEW_SAVED:
         await this.ack(ctx, 'Сохранённые подборки');
         return this.showSaved(ctx);
@@ -503,13 +519,60 @@ export class BotOrchestrator {
     s.last_search_token = token.token;
     s.state = 'APP_OPENING';
     await this.d.sessions.save(s);
+    this.d.log.info({ user: hashUserId(userId), ...preview.counts }, 'search token issued');
+    await this.sendSelection(ctx, preview, token.token);
+  }
 
-    const open = this.open(token.token);
-    const lines = [T.found(preview.counts)];
+  /** «Отобрал 5 из N», три лучших с основанием типа и кнопки: открыть подборку, запросить КП. */
+  private async sendSelection(ctx: Ctx, preview: SearchResponse, token: string): Promise<void> {
+    const open = this.open(token);
+    const total = preview.counts.isEstimate ? preview.counts.total : preview.counts.matched;
+    const lines = [selectionText(preview.counts.shown, total, preview.results.slice(0, 3))];
+    if (preview.counts.isEstimate) lines.push(`Проверил ${preview.counts.evaluated.toLocaleString('ru-RU')} лучших совпадений категории.`);
     if (preview.sources.some((x) => x.status === 'failed')) lines.push(T.sourcesDown);
     lines.push(open ? T.ready : T.readyNoUsername);
-    this.d.log.info({ user: hashUserId(userId), ...preview.counts }, 'search token issued');
-    await this.send(ctx, lines.join('\n\n'), readyKeyboard(open));
+    await this.send(ctx, lines.join('\n\n'), readyKeyboard(open, token));
+  }
+
+  /** Запрос КП из бота: готовый текст для каждого из трёх лучших и ссылки для поиска контактов по ИНН. */
+  private async sendQuoteRequests(ctx: Ctx, s: BotSession, token?: string): Promise<void> {
+    const rec = token ? await this.d.tokens.get(token) : null;
+    const query = rec?.query ?? (s.product ? this.toSearchQuery(s) : null);
+    if (!query) return this.send(ctx, 'Не нашёл параметры поиска: начните новый поиск.', mainMenu(this.open()));
+    const found = await this.d.search.search(query, { userId: String(ctx.userId), origin: 'bot', track: false });
+    const ids = found.results.slice(0, 3).map((r) => r.id);
+    const items = await this.d.quotes.prepare(query, ids);
+    if (!items.length) return this.send(ctx, T.emptyResults);
+    await this.send(ctx, `Готовые запросы КП для ${items.length === 1 ? 'лучшего поставщика' : `трёх лучших поставщиков`}. Скопируйте текст и отправьте поставщику — контакты ищутся по ИНН по ссылкам.`);
+    for (const it of items) {
+      const contacts = [it.contacts.phone && `тел. ${it.contacts.phone}`, it.contacts.email, it.contacts.website].filter(Boolean).join(' · ');
+      const links = it.lookup.map((l) => `${l.label}: ${l.url}`).join('\n');
+      await this.send(ctx, `${it.name} (ИНН ${it.inn})\n${contacts || 'Контакты в открытых данных не найдены.'}\n${links}\n\n${it.text}`);
+    }
+    await this.d.quotes.record(String(ctx.userId), query, ids, 'bot', null);
+    this.d.analytics.track('quote_requested', { userId: String(ctx.userId), props: { source: 'bot', suppliers: ids.length } });
+  }
+
+  /** Вопрос «Поставщики ответили?» через заданное время после запроса КП. */
+  async sendQuoteFollowUp(due: DueFollowUp): Promise<void> {
+    const kb = keyboard([[cb('Да, ответили', CB.QUOTE_ANSWER, `yes:${due.id}`, 'positive')], [cb('Нет, не ответили', CB.QUOTE_ANSWER, `no:${due.id}`)]]);
+    await this.transport.send({ userId: Number(due.userId) }, { text: `Вы запрашивали КП: ${this.d.quotes.describePurchase(due.query)}.\n\nПоставщики ответили?`, attachments: [kb] });
+  }
+
+  private async onQuoteAnswer(ctx: Ctx, arg: string): Promise<void> {
+    const [answer, id] = arg.split(':');
+    if ((answer !== 'yes' && answer !== 'no') || !id) return this.send(ctx, T.askProduct);
+    const rec = await this.d.quotes.answer(id, String(ctx.userId), answer);
+    await this.ack(ctx, answer === 'yes' ? 'Да, ответили' : 'Нет, не ответили');
+    if (!rec) return this.send(ctx, T.error);
+    if (!rec.repeated) this.d.analytics.track('quote_answered', { userId: String(ctx.userId), props: { answer, reached: answer === 'yes' } });
+    if (answer === 'yes') return this.send(ctx, 'Спасибо! Если понадобится ещё один поиск — отправьте /find.', mainMenu(this.open()));
+    const userId = String(ctx.userId);
+    const preview = await this.d.search.search(rec.query, { userId, origin: 'bot', track: false });
+    if (!preview.counts.shown) return this.send(ctx, T.emptyResults, mainMenu(this.open()));
+    const token = await this.d.tokens.create(userId, rec.query);
+    await this.send(ctx, 'Тогда пришлю подборку заново: возможно, подойдут другие поставщики.');
+    await this.sendSelection(ctx, preview, token.token);
   }
 
   private async showSaved(ctx: Ctx): Promise<void> {

@@ -137,9 +137,21 @@ export function StateView({ title, text, children }: { title: string; text?: Rea
   );
 }
 
-export function Section({ title, children, tone, id }: { title: string; children: ReactNode; tone?: 'sky'; id?: string }) {
+/** Раздел карточки. `collapsed` — свёрнут по умолчанию (подробности, которые нужны не каждому): карточка короче, всё остаётся на месте. */
+export function Section({ title, children, tone, id, collapsed }: { title: string; children: ReactNode; tone?: 'sky'; id?: string; collapsed?: boolean }) {
+  const cls = `section ${tone === 'sky' ? 'section--sky' : ''}`;
+  if (collapsed) {
+    return (
+      <details className={`${cls} section--collapsible`}>
+        <summary className="t-h2 section__title" id={id}>
+          {title}
+        </summary>
+        {children}
+      </details>
+    );
+  }
   return (
-    <section className={`section ${tone === 'sky' ? 'section--sky' : ''}`} aria-labelledby={id}>
+    <section className={cls} aria-labelledby={id}>
       <h2 className="t-h2 section__title" id={id}>
         {title}
       </h2>

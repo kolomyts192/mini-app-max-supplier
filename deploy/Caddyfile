@@ -1,0 +1,15 @@
+# HTTPS для мини-приложения MAX: Caddy сам получает и продлевает сертификат Let's Encrypt.
+# Адреса берутся из переменной DOMAINS в .env через запятую, например: example.com, 1-2-3-4.sslip.io
+# (A-запись должна указывать на этот сервер, порты 80 и 443 открыты).
+{$DOMAINS} {
+	encode zstd gzip
+
+	# Приложение, API и webhook MAX (/webhooks/max) — один сервис
+	reverse_proxy app:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

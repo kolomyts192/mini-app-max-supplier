@@ -1,6 +1,7 @@
 import { createLlmClient } from './ai/factory';
 import { CombinedQueryInterpreter, GigaChatQueryInterpreter, InterpretationCache } from './ai/queryInterpreter';
 import { DisabledRelevanceJudge, GigaChatRelevanceJudge, RankingCache, type RelevanceJudge } from './ai/relevanceJudge';
+import { QuoteService } from './services/quote';
 import { BotOrchestrator, type BotTransport } from './bot/orchestrator';
 import { BotNotifier, maxTransport, Poller, UpdateIngestor } from './bot/runtime';
 import { SessionStore } from './bot/session';
@@ -46,6 +47,8 @@ export interface Container {
   queue: StreamQueue<MaxUpdate>;
   ingestor: UpdateIngestor;
   orchestrator: BotOrchestrator;
+  quotes: QuoteService;
+  transport: BotTransport;
   notifier: BotNotifier;
   poller: Poller | null;
   botUsername: { value: string | null };
@@ -72,7 +75,7 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
     ? new CombinedQueryInterpreter(rules, new GigaChatQueryInterpreter(llm, catalog), new InterpretationCache(redis), log, config.GIGACHAT_TIMEOUT_MS)
     : rules;
   const judge: RelevanceJudge = llm.enabled
-    ? new GigaChatRelevanceJudge(llm, catalog, new RankingCache(redis), log, { deadlineMs: config.GIGACHAT_TIMEOUT_MS, top: config.GIGACHAT_RERANK_TOP })
+    ? new GigaChatRelevanceJudge(llm, catalog, new RankingCache(redis), log, { deadlineMs: config.GIGACHAT_RANK_TIMEOUT_MS, top: config.GIGACHAT_RERANK_TOP })
     : new DisabledRelevanceJudge();
   const search = new SearchService({
     db,
@@ -109,8 +112,9 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
           },
           async answer() {},
         });
+  const quotes = new QuoteService(db, new SupplierRepository(db), catalog, log, config.QUOTE_FOLLOWUP_MINUTES);
   const orchestrator = new BotOrchestrator(
-    { sessions, catalog, tokens, search, saved, analytics, log, openAppMode: config.MAX_OPEN_APP_BUTTON, botUsername: () => botUsername.value, interpreter, rules },
+    { quotes, sessions, catalog, tokens, search, saved, analytics, log, openAppMode: config.MAX_OPEN_APP_BUTTON, botUsername: () => botUsername.value, interpreter, rules },
     transport,
   );
   const notifier = new BotNotifier(api, log);
@@ -118,6 +122,6 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
 
   return {
     config, log, db, redis, blockingRedis, catalog, sources, search, overview, saved, tokens, analytics, audit, sessions,
-    api, queue, ingestor, orchestrator, notifier, poller, botUsername,
+    api, queue, ingestor, orchestrator, quotes, transport, notifier, poller, botUsername,
   };
 }

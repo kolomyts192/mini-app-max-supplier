@@ -58,12 +58,22 @@ export function sourcesList(ids: string[] | undefined): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} и ${names.at(-1)}` : names[0] ?? '';
 }
 
-/** «Подошло 37 · проверено 150 из 1 694 · показаны 5»: сведения собираются только для лучших совпадений категории. */
-export function countsLine(c: { total: number; evaluated: number; matched: number; shown: number; isEstimate: boolean }): string {
+/** Заголовок выдачи: «5 лучших из 24 320»; когда показано всё — «Найдено 3». */
+export function headline(c: { total: number; matched: number; shown: number; isEstimate: boolean }): string {
   const n = (v: number) => v.toLocaleString('ru-RU');
-  const shown = c.shown === c.matched ? 'показаны все' : `показаны ${n(c.shown)}`;
-  if (c.isEstimate) return `Подошло ${n(c.matched)} · проверено ${n(c.evaluated)} из ${n(c.total)} · ${shown}`;
-  return c.matched === c.total ? `Подошло ${n(c.matched)} · ${shown}` : `Подошло ${n(c.matched)} из ${n(c.total)} · ${shown}`;
+  const of = c.isEstimate ? c.total : c.matched;
+  if (c.shown >= of) return `Найдено ${n(of)}`;
+  return `${n(c.shown)} ${c.shown === 1 ? 'лучший' : 'лучших'} из ${n(of)}`;
+}
+
+/** Пояснение к заголовку: сведения собираются только для лучших совпадений категории. */
+export function countsLine(c: { evaluated: number; isEstimate: boolean }): string {
+  return c.isEstimate ? `Проверено ${c.evaluated.toLocaleString('ru-RU')} лучших совпадений категории` : '';
+}
+
+/** «Проверено: реестр МСП · ЕГРЮЛ · Росаккредитация». */
+export function checkedLine(checked: string[] | undefined): string {
+  return checked?.length ? `Проверено: ${checked.join(' · ')}` : '';
 }
 
 /** «Реестр МСП на 10.10.2026 · налоги на 25.09.2026»; для тестовой базы — дата проверки показанных компаний. */

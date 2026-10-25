@@ -5,6 +5,7 @@ import type {
   Financials,
   HistoryItem,
   Overview,
+  QuoteItem,
   SavedSupplierItem,
   SearchQuery,
   SearchResponse,
@@ -77,6 +78,13 @@ async function request<T>(method: string, path: string, body?: unknown, extra: R
 
 const ctx = (q: SearchQuery | null | undefined) => (q ? `ctx=${encodeURIComponent(JSON.stringify(q))}` : '');
 
+export interface QuoteBody {
+  supplierIds: string[];
+  query: SearchQuery;
+  searchId?: string | null;
+  source: 'results' | 'card' | 'compare';
+}
+
 export const api = {
   session: () => request<SessionInfo>('GET', '/api/session'),
   catalog: () => request<Catalog>('GET', '/api/catalog'),
@@ -98,6 +106,8 @@ export const api = {
     request<{ ok: boolean }>('PUT', `/api/saved/suppliers/${id}`, body, searchId ? { 'X-Search-Id': searchId } : {}),
   updateSupplierNote: (id: string, note: string | null) => request<{ ok: boolean }>('PATCH', `/api/saved/suppliers/${id}`, { note }),
   removeSupplier: (id: string) => request<{ ok: boolean }>('DELETE', `/api/saved/suppliers/${id}`),
+  quote: (body: QuoteBody) => request<{ items: QuoteItem[]; followUpMinutes: number }>('POST', '/api/quote', body),
+  quoteSent: (body: QuoteBody) => request<{ id: string }>('POST', '/api/quote/sent', body),
   history: () => request<{ items: HistoryItem[] }>('GET', '/api/history'),
   feedback: (text: string) => request<{ ok: boolean }>('POST', '/api/feedback/category', { text }),
   event: (name: string, searchId?: string | null, props?: Record<string, unknown>) =>

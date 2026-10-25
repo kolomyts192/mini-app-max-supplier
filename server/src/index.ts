@@ -12,6 +12,13 @@ async function main() {
 
   await runMigrations(c.db, config.migrationsDir, log);
   if (config.SEED_ON_START) await seedTestData(c.db, config.dataDir, log);
+  if (config.SEARCH_DATA === 'real') {
+    const { rowCount } = await c.db.query("SELECT 1 FROM suppliers WHERE source_type = 'OFFICIAL' LIMIT 1");
+    if (!rowCount) {
+      c.search.useDemoData();
+      log.warn('official data is not imported yet: search works on the demo test base (run the open data import: see README)');
+    }
+  }
 
   // Username бота нужен для deep link https://max.ru/<bot>?startapp=<token>
   if (c.api && !c.botUsername.value) {
@@ -54,9 +61,24 @@ async function main() {
   void retention();
   const retentionTimer = setInterval(retention, 6 * 3600 * 1000);
 
+  // Через заданное время после запроса КП бот спрашивает «Поставщики ответили?»
+  const followUps = async () => {
+    if (!c.api) return;
+    for (const due of await c.quotes.dueFollowUps().catch((err) => (log.warn({ err: err.message }, 'quote follow-ups query failed'), []))) {
+      try {
+        await c.orchestrator.sendQuoteFollowUp(due);
+      } catch (err) {
+        log.warn({ err: (err as Error).message, id: due.id }, 'quote follow-up not sent');
+        await c.quotes.retryLater(due.id).catch(() => undefined);
+      }
+    }
+  };
+  const followUpTimer = setInterval(() => void followUps(), 60_000);
+
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'shutting down');
     clearInterval(retentionTimer);
+    clearInterval(followUpTimer);
     c.poller?.stop();
     c.queue.stop();
     await app.close().catch(() => undefined);

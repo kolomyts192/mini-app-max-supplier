@@ -1,0 +1,75 @@
+# Боевой запуск за HTTPS:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Нужны в .env: DOMAINS (адреса через запятую), POSTGRES_PASSWORD (длинный случайный), MAX_BOT_TOKEN, PUBLIC_BASE_URL=https://<домен>,
+# MAX_UPDATES_MODE=webhook, MAX_WEBHOOK_SECRET, ALLOW_BROWSER_DEMO=false.
+# Наружу открыты только 80 и 443 (Caddy); база, Redis и приложение доступны лишь внутри сети Docker.
+name: proveren-postavshik
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: supplier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: supplier
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supplier -d supplier"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://supplier:${POSTGRES_PASSWORD}@postgres:5432/supplier
+      REDIS_URL: redis://redis:6379
+      OPENDATA_DIR: /opendata
+    volumes:
+      - opendata:/opendata
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAINS: ${DOMAINS:?задайте DOMAINS в .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  opendata:
+  caddy_data:
+  caddy_config:

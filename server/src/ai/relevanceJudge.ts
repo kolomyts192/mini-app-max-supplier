@@ -4,17 +4,17 @@ import type { Catalog } from '../catalog/catalog';
 import type { SearchQuery } from '../domain/types';
 import type { RedisClient } from '../infra/redis';
 import type { Logger } from '../logger';
-import { attributeLabel } from '../search/attributes';
 import type { AiStepStatus, SupplierSummary } from '../search/dto';
 import type { SupplierRow } from '../search/model';
 import { type LlmClient, type LlmFunction, LlmUnavailableError } from './llm';
 
-/** Оценка ИИ: 3 — сведения прямо подтверждают товар, 2 — производит товар, 1 — смежное, 0 — не подходит. */
+/** Оценка ИИ: 3 — сам товар по документу, 2 — сам товар только по ОКВЭД, 1 — изделия из товара или смежное, 0 — не подходит. */
 export interface RelevanceVerdict {
   relevance: 0 | 1 | 2 | 3;
   reason: string;
-  /** Дословная цитата из сведений кандидата, проверенная программно. */
+  /** Строка сведений из реестров, на которую сослалась модель: текст и откуда он. */
   quote: string;
+  source: string;
 }
 
 export interface JudgeResult {
@@ -28,11 +28,20 @@ export interface RelevanceJudge {
   judge(q: SearchQuery, candidates: { summary: SupplierSummary; row: SupplierRow }[]): Promise<JudgeResult>;
 }
 
-/** Обезличенные сведения кандидата: что о его продукции говорят реестры. Название, ИНН и ФИО не передаются. */
+/** Строка сведений: откуда (ОКВЭД, декларация…) и что в ней написано. */
+export interface EvidenceLine {
+  source: string;
+  text: string;
+}
+
+/**
+ * Обезличенные сведения кандидата: что о его продукции говорят реестры. Название, ИНН и ФИО не передаются.
+ * Характеристики сюда не входят: их сверяют правила, а модель судит только о том, тот ли это товар.
+ */
 export interface EvidencePack {
   key: string;
   supplierId: string;
-  lines: string[];
+  lines: EvidenceLine[];
 }
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
@@ -40,34 +49,24 @@ const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1
 /** Сведения о продукции кандидата — то же, на чём основано объяснение выдачи. */
 export class EvidencePackBuilder {
   build(key: string, summary: SupplierSummary, row: SupplierRow): EvidencePack {
-    const lines: string[] = [];
-    if (row.okved_main) lines.push(`ОКВЭД: ${row.okved_main.code} ${row.okved_main.name}`);
+    const lines: EvidenceLine[] = [];
+    if (row.okved_main) lines.push({ source: 'ОКВЭД', text: `${row.okved_main.code} ${row.okved_main.name}` });
     const declared = row.products.filter((p) => p.origin === 'SME_DECLARED').map((p) => p.title);
-    if (declared.length) lines.push(`Заявленная продукция: ${clip([...new Set(declared)].join('; '), 200)}`);
+    if (declared.length) lines.push({ source: 'Заявленная продукция', text: clip([...new Set(declared)].join('; '), 200) });
     const docs = [...summary.documents.items].sort((a, b) => Number(b.match === 'product') - Number(a.match === 'product')).filter((d) => d.productName).slice(0, 2);
-    for (const d of docs) lines.push(`${d.type === 'DECLARATION' ? 'Декларация' : 'Сертификат'} (${d.statusLabel.toLowerCase()}): ${clip(d.productName!, 180)}`);
-    for (const a of summary.match.attributes) {
-      const state = a.status === 'confirmed' ? 'подтверждено' : a.status === 'mismatch' ? 'в документе другое значение' : 'не указано';
-      lines.push(`Характеристика «${a.label}»: ${state}${a.quote ? ` — ${clip(a.quote, 80)}` : ''}`);
-    }
+    for (const d of docs) lines.push({ source: `${d.type === 'DECLARATION' ? 'Декларация' : 'Сертификат'} (${d.statusLabel.toLowerCase()})`, text: clip(d.productName!, 180) });
     return { key, supplierId: summary.id, lines };
   }
-}
 
-const norm = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .replace(/[«»"“”„'`]/g, '')
-    .replace(/[…]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  /** Сведения для модели. У строк сквозные номера (c3.2), чтобы оценка ссылалась на строку однозначно. */
+  static render(pack: EvidencePack): string {
+    return pack.lines.map((l, i) => `${pack.key}.${i + 1} ${l.source}: ${l.text}`).join('\n');
+  }
 
-/** Цитата из объяснения ИИ должна дословно (с точностью до регистра и пробелов) быть в сведениях кандидата. */
-export class CitationVerifier {
-  verify(quote: string, pack: EvidencePack): boolean {
-    const q = norm(quote);
-    return q.length >= 5 && norm(pack.lines.join(' ')).includes(q);
+  /** Строка, на которую сослалась модель, — только из сведений этого кандидата. */
+  static line(pack: EvidencePack, ref: string): EvidenceLine | null {
+    const m = new RegExp(`^${pack.key}\\.(\\d+)$`).exec(ref.trim());
+    return m ? (pack.lines[Number(m[1]) - 1] ?? null) : null;
   }
 }
 
@@ -77,26 +76,33 @@ const argsSchema = z.object({
       z.object({
         id: z.string(),
         relevance: z.coerce.number().int().min(0).max(3),
+        basis: z.coerce.string().catch(''),
         reason: z.string().default(''),
-        quote: z.string().default(''),
       }),
     )
     .default([]),
 });
 
-const SYSTEM = `Ты оцениваешь, насколько поставщики подходят под запрос закупщика, только по приведённым сведениям из официальных реестров: ОКВЭД, заявленная продукция, названия продукции в сертификатах и декларациях. Не используй другие знания о компаниях и ничего не додумывай.
-relevance: 3 — сведения прямо подтверждают нужный товар (и характеристики, если они указаны в запросе); 2 — компания производит этот товар, но характеристики не подтверждены; 1 — смежная продукция или только общий вид деятельности; 0 — не подходит.
-reason — одно короткое предложение (до 120 символов), почему такая оценка.
-quote — дословная цитата из сведений этого кандидата (от 5 до 100 символов), на которой основана оценка.
+const SYSTEM = `Ты проверяешь, поставляет ли кандидат именно нужный товар, только по приведённым сведениям из официальных реестров: ОКВЭД, заявленная продукция, продукция в сертификатах и декларациях. Не используй другие знания о компаниях и ничего не додумывай.
+Марку, размеры, сорт, класс и назначение не оценивай: их сверяет программа отдельно, поэтому в запросе их нет.
+Если запрос уточняет, из чего товар (пшеничная мука, березовая фанера), продукция из другого сырья — 1.
+relevance:
+3 — документ или заявленная продукция на сам товар;
+2 — сам товар следует только из ОКВЭД;
+1 — изделия из этого товара или смежная продукция (для товара «фанера» — панели на основе фанеры, отделочные системы);
+0 — сведения не относятся к товару.
+basis — номер строки сведений, на которой основана оценка, например c3.2.
+reason — коротко, до 60 символов: что это за продукция.
 Оцени каждого кандидата ровно один раз.`;
 
 /**
- * Оценка кандидатов GigaChat. Модель видит только обезличенные сведения о продукции под номерами c1…cN;
- * оценка учитывается, только если её цитата найдена в сведениях именно этого кандидата.
+ * Оценка кандидатов GigaChat. Модель видит только обезличенные сведения о продукции под номерами c1…cN
+ * с пронумерованными строками; оценка учитывается, только если ссылается на существующую строку сведений
+ * именно этого кандидата — эта строка и показывается как основание. Ссылка вместо цитаты: модель не может
+ * исказить текст реестра, а ответ короче и быстрее.
  */
 export class GigaChatRelevanceJudge implements RelevanceJudge {
   private readonly packs = new EvidencePackBuilder();
-  private readonly citations = new CitationVerifier();
 
   constructor(
     private readonly llm: LlmClient,
@@ -112,7 +118,7 @@ export class GigaChatRelevanceJudge implements RelevanceJudge {
 
   async judge(q: SearchQuery, candidates: { summary: SupplierSummary; row: SupplierRow }[]): Promise<JudgeResult> {
     if (!this.enabled) return { verdicts: new Map(), status: 'disabled' };
-    const packs = candidates.slice(0, this.opts.top).map((c, i) => this.packs.build(`c${i + 1}`, c.summary, c.row));
+    const packs = candidates.slice(0, this.opts.top).map((c, i) => this.packs.build(`c${i + 1}`, c.summary, c.row)).filter((p) => p.lines.length);
     if (packs.length < 2) return { verdicts: new Map(), status: 'skipped' };
     const queryText = this.describe(q);
     const cacheKey = RankingCache.key(queryText, packs);
@@ -122,10 +128,10 @@ export class GigaChatRelevanceJudge implements RelevanceJudge {
       const result = await this.llm.callFunction({
         purpose: 'rank',
         system: SYSTEM,
-        user: `${queryText}\n\nКандидаты:\n${packs.map((p) => `[${p.key}]\n${p.lines.join('\n')}`).join('\n\n')}`,
+        user: `${queryText}\n\nКандидаты:\n${packs.map(EvidencePackBuilder.render).join('\n')}`,
         fn: this.fn(packs.map((p) => p.key)),
         deadlineMs: this.opts.deadlineMs,
-        maxTokens: 60 * packs.length + 100,
+        maxTokens: 90 * packs.length + 150,
       });
       const parsed = argsSchema.safeParse(result.args);
       if (!parsed.success) throw new LlmUnavailableError('invalid', 'оценка GigaChat не по схеме');
@@ -139,7 +145,7 @@ export class GigaChatRelevanceJudge implements RelevanceJudge {
     }
   }
 
-  /** Только оценки с подтверждённой цитатой; остальные кандидаты остаются в порядке без ИИ. */
+  /** Только оценки со ссылкой на сведения этого кандидата; остальные кандидаты остаются в порядке без ИИ. */
   private verified(items: z.infer<typeof argsSchema>['items'], packs: EvidencePack[]): Map<string, RelevanceVerdict> {
     const byKey = new Map(packs.map((p) => [p.key, p]));
     const out = new Map<string, RelevanceVerdict>();
@@ -147,20 +153,29 @@ export class GigaChatRelevanceJudge implements RelevanceJudge {
     for (const item of items) {
       const pack = byKey.get(item.id);
       if (!pack || out.has(pack.supplierId)) continue;
-      if (!this.citations.verify(item.quote, pack) || !item.reason.trim()) {
+      const line = EvidencePackBuilder.line(pack, item.basis);
+      if (!line || !item.reason.trim()) {
         rejected += 1;
         continue;
       }
-      out.set(pack.supplierId, { relevance: item.relevance as RelevanceVerdict['relevance'], reason: clip(item.reason.trim(), 160), quote: clip(item.quote.trim(), 120) });
+      out.set(pack.supplierId, { relevance: item.relevance as RelevanceVerdict['relevance'], reason: clip(item.reason.trim(), 120), quote: clip(line.text, 120), source: line.source });
     }
-    if (rejected) this.log.info({ rejected, accepted: out.size }, 'ranking verdicts without verifiable quote dropped');
+    if (rejected) this.log.info({ rejected, accepted: out.size }, 'ranking verdicts without evidence reference dropped');
     return out;
   }
 
+  /**
+   * Товар и запрос без характеристик: модель их не видит, чтобы не отбраковывать по ним — их сверяют правила.
+   * «мука пшеничная высший сорт» → «мука пшеничная», «фанера ФСФ 18 мм» → «фанера».
+   */
   private describe(q: SearchQuery): string {
-    const product = this.catalog.product(q.productId)?.name ?? this.catalog.category(q.categoryId)?.name ?? q.text;
-    const attrs = (q.attributes ?? []).map(attributeLabel);
-    return [`Запрос: «${clip(q.text || product, 120)}»`, `Товар: ${product}`, attrs.length ? `Характеристики: ${attrs.join(', ')}` : null].filter(Boolean).join('\n');
+    const product = this.catalog.product(q.productId)?.name ?? this.catalog.category(q.categoryId)?.name;
+    const words = new Set((q.attributes ?? []).flatMap((a) => [a.name, a.text ?? '']).flatMap((w) => w.toLowerCase().split(/\s+/)).filter(Boolean));
+    const request = q.text
+      .split(/[\s,;]+/)
+      .filter((w) => w && !/\d/.test(w) && !words.has(w.toLowerCase()) && !/^(мм|см|м|кг|т|шт|сорт[а-я]*)$/i.test(w))
+      .join(' ');
+    return [product ? `Товар: ${product}` : null, `Запрос: «${clip(request || q.text, 120)}»`].filter(Boolean).join('\n');
   }
 
   private fn(keys: string[]): LlmFunction {
@@ -176,11 +191,11 @@ export class GigaChatRelevanceJudge implements RelevanceJudge {
               type: 'object',
               properties: {
                 id: { type: 'string', enum: keys },
-                relevance: { type: 'integer', enum: [0, 1, 2, 3], description: '3 — подтверждено, 2 — производит товар, 1 — смежное, 0 — не подходит' },
-                reason: { type: 'string', description: 'Почему такая оценка, до 120 символов' },
-                quote: { type: 'string', description: 'Дословная цитата из сведений кандидата' },
+                relevance: { type: 'integer', enum: [0, 1, 2, 3], description: '3 — сам товар по документу, 2 — сам товар по ОКВЭД, 1 — изделия из товара или смежное, 0 — не подходит' },
+                basis: { type: 'string', description: 'Номер строки сведений кандидата, например c3.2' },
+                reason: { type: 'string', description: 'Что это за продукция, до 60 символов' },
               },
-              required: ['id', 'relevance', 'reason', 'quote'],
+              required: ['id', 'relevance', 'basis', 'reason'],
             },
           },
         },
@@ -197,8 +212,8 @@ export class RankingCache {
   constructor(private readonly redis: RedisClient) {}
 
   static key(query: string, packs: EvidencePack[]): string {
-    const hash = crypto.createHash('sha1').update(query).update(packs.map((p) => `${p.supplierId}:${p.lines.join('|')}`).join('\n')).digest('hex');
-    return `ai:rank:v1:${hash}`;
+    const hash = crypto.createHash('sha1').update(query).update(packs.map((p) => `${p.supplierId}:${p.lines.map((l) => `${l.source}:${l.text}`).join('|')}`).join('\n')).digest('hex');
+    return `ai:rank:v5:${hash}`;
   }
 
   async get(key: string): Promise<Map<string, RelevanceVerdict> | null> {

@@ -37,7 +37,8 @@ export interface LlmCall {
 export interface LlmResult {
   args: unknown;
   model: string;
-  usage: { prompt: number; completion: number; total: number };
+  /** Токены по данным GigaChat; precached — часть запроса, взятая из кэша модели (в prompt не входит). */
+  usage: { prompt: number; completion: number; total: number; precached: number };
 }
 
 export type LlmFailure = 'disabled' | 'timeout' | 'busy' | 'unavailable' | 'invalid';

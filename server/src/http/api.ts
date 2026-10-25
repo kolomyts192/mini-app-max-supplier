@@ -239,5 +239,32 @@ export async function apiRoutes(app: FastifyInstance, c: Container) {
     return reply.code(201).send({ ok: true });
   });
 
-  app.get('/api/sources/health', async () => ({ sources: await c.sources.health() }));
+  // ── Запрос КП ─────────────────────────────────────────────────────────────
+
+  const quoteBody = z.object({
+    supplierIds: z.array(uuid).min(1).max(5),
+    query: searchQuerySchema,
+    searchId: z.string().max(64).nullable().optional(),
+    source: z.enum(['results', 'card', 'compare']),
+  });
+
+  /** Готовый текст запроса КП и ссылки для поиска сайта и телефона по ИНН. */
+  app.post('/api/quote', async (req, reply) => {
+    const body = quoteBody.safeParse(req.body);
+    if (!body.success) return bad(reply, 'Выберите от одного до пяти поставщиков');
+    const items = await c.quotes.prepare(body.data.query, body.data.supplierIds);
+    if (!items.length) return reply.code(404).send({ error: 'not_found', message: 'Поставщики не найдены' });
+    return { items, followUpMinutes: c.config.QUOTE_FOLLOWUP_MINUTES };
+  });
+
+  /** Пользователь отправил или скопировал запрос: бот позже спросит, ответили ли поставщики. */
+  app.post('/api/quote/sent', async (req, reply) => {
+    const body = quoteBody.safeParse(req.body);
+    if (!body.success) return bad(reply, 'Некорректный запрос');
+    const id = await c.quotes.record(userId(req), body.data.query, body.data.supplierIds, body.data.source, body.data.searchId ?? null);
+    c.analytics.track('quote_requested', { userId: userId(req), searchId: body.data.searchId ?? null, props: { source: body.data.source, suppliers: body.data.supplierIds.length } });
+    return reply.code(201).send({ id });
+  });
+
+  app.get('/api/sources/health', async () => ({ sources: await c.search.sourceHealth() }));
 }

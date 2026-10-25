@@ -5,7 +5,7 @@ import { type ParsedQuery, parseQuery } from '../parser/queryParser';
 import { AttributeExtractor } from './attributes';
 
 /** Как разобран запрос и что с ИИ: ok — разобран ИИ, cached — из кэша, остальное — разбор только на правилах. */
-export type InterpretationStatus = 'ok' | 'cached' | 'disabled' | 'timeout' | 'error';
+export type InterpretationStatus = 'ok' | 'cached' | 'disabled' | 'timeout' | 'error' | 'skipped';
 
 /** Разобранный свободный текст: параметры поиска, характеристики товара и уточняющий вопрос. */
 export interface Interpretation extends Omit<ParsedQuery, 'missing'> {
@@ -32,6 +32,11 @@ export class RuleQueryInterpreter implements QueryInterpreter {
 
   async interpret(text: string): Promise<Interpretation> {
     return this.interpretSync(text);
+  }
+
+  /** Правила справились сами: узнан конкретный товар справочника, ИИ для разбора не нужен. */
+  static confident(i: Interpretation): boolean {
+    return !!i.product?.productId && i.product.confidence >= 0.8;
   }
 
   interpretSync(text: string): Interpretation {

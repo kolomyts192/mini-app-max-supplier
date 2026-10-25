@@ -1,7 +1,8 @@
 import { Check, CheckCircle2, MinusCircle, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import type { Catalog, Provenance, SourceStatus, SupplierSummary } from '../api/types';
-import { api } from '../api/client';
+import { useEffect, useMemo, useState } from 'react';
+import type { Catalog, Provenance, QuoteItem, SearchQuery, SourceStatus, SupplierSummary } from '../api/types';
+import { api, type QuoteBody } from '../api/client';
+import { copyText, openExternal, shareToChat } from '../bridge';
 import { useApp } from '../store';
 import { sourcesList } from '../utils';
 import { BottomSheet } from './BottomSheet';
@@ -172,6 +173,116 @@ export function MissingProductSheet({ open, onClose }: { open: boolean; onClose:
       </label>
       <input id="missing-product" className="input" value={text} maxLength={300} onChange={(e) => setText(e.target.value)} placeholder="Например, керамогранит" />
       <p className="field__hint">Запрос поможет выбрать, какие категории добавить следующими.</p>
+    </BottomSheet>
+  );
+}
+
+function followUpText(minutes: number): string {
+  if (minutes >= 1440) return `${Math.round(minutes / 1440)} дн.`;
+  if (minutes >= 60) return `${Math.round(minutes / 60)} ч`;
+  return `${minutes} мин`;
+}
+
+/**
+ * Запрос КП: готовый текст для каждого поставщика, отправка в чат MAX или копирование, поиск сайта и телефона по ИНН.
+ * После отправки или копирования бот через заданное время спросит в чате, ответили ли поставщики.
+ */
+export function QuoteSheet({ suppliers, query, searchId, source, onClose }: { suppliers: { id: string; name: string }[]; query: SearchQuery; searchId: string | null; source: QuoteBody['source']; onClose: () => void }) {
+  const showToast = useApp((s) => s.showToast);
+  const [items, setItems] = useState<QuoteItem[] | null>(null);
+  const [minutes, setMinutes] = useState(2880);
+  const [texts, setTexts] = useState<Record<string, string>>({});
+  const [error, setError] = useState(false);
+  const ids = suppliers.map((x) => x.id).join(',');
+
+  useEffect(() => {
+    if (!suppliers.length) return;
+    let alive = true;
+    setItems(null);
+    setError(false);
+    api
+      .quote({ supplierIds: suppliers.map((x) => x.id), query, searchId, source })
+      .then((r) => {
+        if (!alive) return;
+        setItems(r.items);
+        setMinutes(r.followUpMinutes);
+        setTexts(Object.fromEntries(r.items.map((i) => [i.id, i.text])));
+      })
+      .catch(() => alive && setError(true));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids]);
+
+  const sent = (id: string) => {
+    void api.quoteSent({ supplierIds: [id], query, searchId, source }).catch(() => undefined);
+    void api.event('contact_link_opened', searchId, { supplierId: id, kind: 'quote' });
+  };
+  const copy = async (i: QuoteItem) => {
+    const ok = await copyText(texts[i.id] ?? i.text);
+    if (ok) {
+      sent(i.id);
+      showToast('Текст скопирован. Вставьте его в письмо или мессенджер');
+    } else showToast('Не удалось скопировать. Выделите текст вручную');
+  };
+  const share = async (i: QuoteItem) => {
+    const r = await shareToChat(texts[i.id] ?? i.text);
+    if (r === 'failed') return showToast('Не удалось отправить. Скопируйте текст вручную');
+    sent(i.id);
+    showToast(r === 'shared' ? 'Выберите чат, куда отправить запрос' : 'Текст скопирован. Вставьте его в чат');
+  };
+
+  return (
+    <BottomSheet open={suppliers.length > 0} title="Запрос КП" onClose={onClose}>
+      {!items && !error && <p className="muted">Готовим текст запроса…</p>}
+      {error && <Notice tone="warning">Не удалось подготовить запрос. Проверьте соединение и попробуйте ещё раз.</Notice>}
+      <div className="stack-4">
+        {items?.map((i) => {
+          const known = [i.contacts.phone, i.contacts.email, i.contacts.website].filter(Boolean);
+          return (
+            <div className="card card--flat" key={i.id}>
+              <div className="t-headline">{i.name}</div>
+              <div className="t-caption muted num">ИНН {i.inn}</div>
+              <textarea
+                className="input"
+                style={{ marginTop: 8, minHeight: 220, fontFamily: 'inherit' }}
+                value={texts[i.id] ?? i.text}
+                onChange={(e) => setTexts({ ...texts, [i.id]: e.target.value })}
+                aria-label={`Текст запроса для ${i.name}`}
+              />
+              <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <Button onClick={() => share(i)}>Отправить в чат MAX</Button>
+                <Button variant="secondary" onClick={() => copy(i)}>
+                  Скопировать
+                </Button>
+              </div>
+              <div className="t-caption muted" style={{ marginTop: 12 }}>
+                {known.length ? `Контакты в базе: ${known.join(' · ')}` : 'Контактов в открытых данных нет: найдите сайт и телефон по ИНН.'}
+              </div>
+              <div className="row" style={{ gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                {i.lookup.map((l) => (
+                  <Button
+                    key={l.url}
+                    variant="text"
+                    onClick={() => {
+                      void api.event('contact_link_opened', searchId, { supplierId: i.id, kind: 'lookup' });
+                      openExternal(l.url);
+                    }}
+                  >
+                    {l.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {items && (
+        <p className="t-caption muted" style={{ marginTop: 12 }}>
+          Через {followUpText(minutes)} после отправки бот спросит в чате, ответили ли поставщики. Если нет, пришлёт подборку заново.
+        </p>
+      )}
     </BottomSheet>
   );
 }

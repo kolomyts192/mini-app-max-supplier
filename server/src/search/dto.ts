@@ -1,3 +1,4 @@
+import type { CoverageSummary } from './coverage';
 import type { Fact, LegalStatus, Provenance, SearchQuery, SmeStatus, SupplierType } from '../domain/types';
 import type { SourceStatus } from '../sources/registry';
 import type { AttributeStatus } from './attributes';
@@ -39,8 +40,8 @@ export interface MatchDto {
   label: string;
   evidence: ProductEvidence | null;
   attributes: { label: string; status: AttributeStatus; quote: string | null; ref: string | null }[];
-  /** Оценка ИИ (0–3) и объяснение — только с цитатой, найденной в доказательствах. */
-  ai: { relevance: number; reason: string; quote: string } | null;
+  /** Оценка ИИ: основание — строка сведений из реестров (quote) и откуда она (source). */
+  ai: { relevance: number; reason: string; quote: string; source: string } | null;
 }
 
 export interface SupplierSummary {
@@ -115,6 +116,8 @@ export interface SearchResponse {
   total: number;
   counts: SearchCounts;
   dates: SearchDates;
+  /** Какие реестры проверены, а какие ещё не подключены. */
+  coverage: CoverageSummary;
   results: SupplierSummary[];
   /** Самая поздняя дата проверки среди показанных компаний. */
   dataDate: string | null;

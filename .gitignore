@@ -2,16 +2,12 @@ node_modules/
 dist/
 coverage/
 backups/
-# Архивы открытых данных, скачанные через браузер (Росаккредитация и др.)
 opendata-cache/
+reports/
 *.log
+*.zip
+!server/test/fixtures/*.zip
 .env
 .env.*
 !.env.example
-# Токен бота из исходных материалов
-TO DO/token.txt
-*.zip
-# Отчёты диагностики и импорта открытых данных (машинные артефакты)
-reports/
-# Маленькие архивы-фикстуры для тестов импорта
-!server/test/fixtures/*.zip
+.DS_Store

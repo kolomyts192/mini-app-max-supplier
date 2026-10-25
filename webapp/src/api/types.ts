@@ -72,7 +72,8 @@ export interface MatchInfo {
   label: string;
   evidence: { quote: string; ref: string | null; source: 'document' | 'declared' | 'okved' } | null;
   attributes: { label: string; status: AttributeStatus; quote: string | null; ref: string | null }[];
-  ai: { relevance: number; reason: string; quote: string } | null;
+  /** Оценка ИИ: основание — строка сведений из реестров (quote) и откуда она (source). */
+  ai: { relevance: number; reason: string; quote: string; source: string } | null;
 }
 
 /** ok/cached — с ИИ; disabled/timeout/error — без ИИ; skipped — не требовалось. */
@@ -173,6 +174,8 @@ export interface SearchResponse {
   counts: SearchCounts;
   /** registryDate — версия реестра МСП, factsDate — налоговых наборов ФНС (YYYY-MM-DD). */
   dates: { registryDate: string | null; factsDate: string | null };
+  /** checked — реестры, по которым сведения проверены; connected — id групп с данными (sme, fns, egrul, fsa, gisp, rnp, fedresurs). */
+  coverage: { checked: string[]; missing: string[]; connected: string[] };
   ai: { interpretation: AiStepStatus; ranking: AiStepStatus };
   results: SupplierSummary[];
   dataDate: string | null;
@@ -352,3 +355,13 @@ export const EMPTY_QUERY: SearchQuery = {
   terms: [],
   interpreted: false,
 };
+
+/** Готовый запрос КП одному поставщику и ссылки для поиска его контактов по ИНН. */
+export interface QuoteItem {
+  id: string;
+  name: string;
+  inn: string;
+  text: string;
+  contacts: { website: string | null; phone: string | null; email: string | null };
+  lookup: { label: string; url: string }[];
+}

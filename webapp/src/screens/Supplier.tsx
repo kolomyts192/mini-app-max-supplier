@@ -1,9 +1,10 @@
-import { Bookmark, BookmarkCheck, Copy, Globe, Mail, Phone, Scale } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Copy, Globe, Mail, Phone, Scale, Send } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, api, NetworkError } from '../api/client';
-import type { DocumentDto, Financials, NotedFact, SupplierCard as Card } from '../api/types';
+import { type DocumentDto, EMPTY_QUERY, type Financials, type NotedFact, type SupplierCard as Card } from '../api/types';
 import { copyText, haptic, openExternal } from '../bridge';
+import { QuoteSheet } from '../components/sheets';
 import { EvidenceBadges, RoleBadge } from '../components/SupplierCard';
 import { Button, CardSkeleton, ExternalLinkButton, FactRow, ICON, ICON_S, IconButton, Notice, ProvenanceLine, ReasonList, Section, Skeleton, StateView, StickyActionBar } from '../components/ui';
 import { decodeQuery, MAX_COMPARE, useApp } from '../store';
@@ -85,6 +86,26 @@ function DocumentItem({ d }: { d: DocumentDto }) {
   );
 }
 
+const DOCUMENTS_SHOWN = 2;
+
+/** У крупных производителей сотни деклараций: показываем первые (действующие и свежие идут первыми), остальные — по кнопке. */
+function DocumentList({ documents }: { documents: DocumentDto[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? documents : documents.slice(0, DOCUMENTS_SHOWN);
+  return (
+    <div className="stack-3">
+      {shown.map((d) => (
+        <DocumentItem d={d} key={d.number} />
+      ))}
+      {documents.length > DOCUMENTS_SHOWN && (
+        <Button variant="secondary" block onClick={() => setAll(!all)}>
+          {all ? 'Свернуть список' : `Показать все документы (${documents.length})`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function FinancialsBlock({ id }: { id: string }) {
   const [state, setState] = useState<'idle' | 'loading' | Financials | 'error'>('idle');
   const load = async () => {
@@ -161,6 +182,7 @@ export function SupplierScreen() {
   const query = useMemo(() => decodeQuery(location.search), [location.search]);
   const { savedSupplierIds, markSupplierSaved, compare, toggleCompare, showToast, lastSearchId } = useApp();
   const [card, setCard] = useState<Card | null>(null);
+  const [quoteOpen, setQuoteOpen] = useState(false);
   const [error, setError] = useState<'offline' | 'error' | 'not_found' | null>(null);
   const [note, setNote] = useState('');
   const [noteDirty, setNoteDirty] = useState(false);
@@ -349,9 +371,9 @@ export function SupplierScreen() {
                   <span className="ai-mark">ИИ</span>
                   {s.match.ai.reason}
                 </div>
-                <p className="t-caption match-quote">«{s.match.ai.quote}»</p>
+                <p className="t-caption match-quote">«{s.match.ai.quote}» — {s.match.ai.source}</p>
                 <p className="t-caption muted" style={{ margin: '4px 0 0' }}>
-                  Объяснение составлено GigaChat только по сведениям из реестров; цитата проверена.
+                  Объяснение составлено GigaChat только по сведениям из реестров; основание — строка выше.
                 </p>
               </div>
             )}
@@ -375,7 +397,7 @@ export function SupplierScreen() {
         </div>
       </Section>
 
-      <Section title="Профиль деятельности" id="activity">
+      <Section title="Профиль деятельности" id="activity" collapsed>
         <div className="facts">
           <FactRow
             label="Основной ОКВЭД"
@@ -391,7 +413,7 @@ export function SupplierScreen() {
         </div>
       </Section>
 
-      <Section title="МСП" id="sme">
+      <Section title="МСП" id="sme" collapsed>
         <div className="facts">
           <FactRow label="Категория" value={card.sme.status.label} p={card.sme.status.provenance} />
           {card.sme.includedAt.value && <FactRow label="Дата включения в реестр" value={formatDate(card.sme.includedAt.value)} p={card.sme.includedAt.provenance} />}
@@ -457,11 +479,7 @@ export function SupplierScreen() {
 
       <Section title="Документы" id="docs">
         {card.documents.length ? (
-          <div className="stack-3">
-            {card.documents.map((d) => (
-              <DocumentItem d={d} key={d.number} />
-            ))}
-          </div>
+          <DocumentList documents={card.documents} />
         ) : fsaUncovered ? (
           <Notice tone="warning" title="Документы не проверялись">
             Открытые данные Росаккредитации ещё не загружены: сайт fsa.gov.ru недоступен с зарубежных IP, импорт запускается с российского адреса. Запросите декларацию или сертификат у поставщика и проверьте номер на pub.fsa.gov.ru.
@@ -472,7 +490,7 @@ export function SupplierScreen() {
       </Section>
 
       {card.requirements && (
-        <Section title="Что запросить" id="request">
+        <Section title="Что запросить" id="request" collapsed>
           <p className="t-caption muted" style={{ marginTop: 0 }}>
             Обычно для категории «{card.requirements.categoryName}» запрашивают:
           </p>
@@ -505,7 +523,7 @@ export function SupplierScreen() {
         </Section>
       )}
 
-      <Section title="Финансы" id="finance">
+      <Section title="Финансы" id="finance" collapsed>
         <FinancialsBlock id={id} />
       </Section>
 
@@ -539,7 +557,12 @@ export function SupplierScreen() {
             ЕГРЮЛ, реестр недобросовестных поставщиков и ЕФРСБ для этой компании не подключены. Проверьте ИНН по ссылкам в разделе «Источники».
           </Notice>
         ) : (
-          <Notice tone="info">Официальных записей о РНП, банкротстве и недостоверности сведений в подключённых источниках не найдено.</Notice>
+          <Notice tone="info" title="Риск-сигналов не найдено">
+            Проверено: {card.riskSourcesChecked.filter((r) => r.status === 'ok').map((r) => r.name).join(', ')}.
+            {card.riskSourcesChecked.some((r) => r.status !== 'ok') && (
+              <> Не проверялось: {card.riskSourcesChecked.filter((r) => r.status !== 'ok').map((r) => r.name).join(', ')} — проверьте ИНН по ссылкам в разделе «Источники».</>
+            )}
+          </Notice>
         )}
         <div className="t-caption muted" style={{ marginTop: 8 }}>
           Источники: {card.riskSourcesChecked.map((r) => `${r.name}${r.status === 'not_configured' ? ' — не подключён' : r.status !== 'ok' ? ' — не ответил' : ''}`).join('; ')}. Показываем только найденные официальные факты, без оценок.
@@ -573,7 +596,7 @@ export function SupplierScreen() {
         <p className="t-caption muted">{card.contacts.isManualTestData ? 'Вымышленные контакты из тестовой базы.' : 'Из открытых источников, могут быть неполными.'} Цена, наличие и сроки не подтверждены.</p>
       </Section>
 
-      <Section title="Источники и ограничения" id="sources">
+      <Section title="Источники и ограничения" id="sources" collapsed>
         <div className="stack-3">
           {card.sources.map((src) => (
             <div className="card card--flat" key={src.source}>
@@ -672,6 +695,9 @@ export function SupplierScreen() {
           </IconButton>
         }
       >
+        <Button variant="secondary" tall block icon={<Send size={20} strokeWidth={2} aria-hidden />} onClick={() => setQuoteOpen(true)}>
+          Запрос КП
+        </Button>
         {saved ? (
           <Button variant="secondary" tall block icon={<BookmarkCheck size={20} strokeWidth={2} aria-hidden />} onClick={toggleSave}>
             Сохранено
@@ -682,6 +708,14 @@ export function SupplierScreen() {
           </Button>
         )}
       </StickyActionBar>
+
+      <QuoteSheet
+        suppliers={quoteOpen ? [{ id, name: card.summary.name }] : []}
+        query={query ?? { ...EMPTY_QUERY, text: card.summary.product.titles[0] ?? '' }}
+        searchId={lastSearchId}
+        source="card"
+        onClose={() => setQuoteOpen(false)}
+      />
     </div>
   );
 }

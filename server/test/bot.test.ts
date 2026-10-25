@@ -13,6 +13,18 @@ interface Sent {
   buttons: { text: string; payload?: string; url?: string }[];
 }
 
+const fakeSupplier = (i: number, over: Record<string, unknown> = {}) => ({
+  id: `00000000-0000-4000-8000-00000000000${i}`,
+  inn: `770000000${i}`,
+  name: `ООО «Тест ${i}»`,
+  region: { code: '16', name: 'Республика Татарстан' },
+  supplierType: 'MANUFACTURER',
+  supplierTypeLabel: 'Производитель',
+  supplierTypeBasis: 'в реестре МСП компания указала производимую продукцию',
+  documents: { items: [] },
+  ...over,
+});
+
 function setup(total = 4, interpreter: QueryInterpreter = rules) {
   const sent: Sent[] = [];
   const transport: BotTransport = {
@@ -24,8 +36,15 @@ function setup(total = 4, interpreter: QueryInterpreter = rules) {
     },
   };
   const searches: unknown[] = [];
+  const quoteLog: unknown[] = [];
   const bot = new BotOrchestrator(
     {
+      quotes: {
+        prepare: async (_q: unknown, ids: string[]) => ids.map((id) => ({ id, name: `ООО «${id.slice(-1)}»`, inn: '7700000000', text: 'Здравствуйте! КП', contacts: { website: null, phone: null, email: null }, lookup: [{ label: 'Найти сайт и телефон', url: 'https://yandex.ru/search/?text=x' }] })),
+        record: async (...a: unknown[]) => (quoteLog.push(a), 'q1'),
+        describePurchase: () => 'Фанера',
+        answer: async () => ({ query: { text: 'фанера' }, supplierIds: [], repeated: false }),
+      } as never,
       sessions: new SessionStore(new FakeRedis() as never),
       catalog,
       tokens: { create: async () => ({ token: 'st_testtoken' }) } as never,
@@ -36,9 +55,14 @@ function setup(total = 4, interpreter: QueryInterpreter = rules) {
             total,
             counts: { total, evaluated: total, matched: total, shown: Math.min(total, 5), isEstimate: false },
             sources: [],
+            results: [fakeSupplier(1), fakeSupplier(2, { documents: { items: [{ type: 'DECLARATION', number: 'ЕАЭС N RU Д-RU.TEST', manufacturerInn: '7700000002' }] } }), fakeSupplier(3, { supplierTypeBasis: null })].slice(0, Math.min(total, 5)),
             empty: total ? null : { actions: [{ id: 'relax_type', label: 'Убрать фильтр «только производитель»', patch: {} }] },
           };
         },
+        imports: async () => [
+          { dataset: 'rsmp', source: 'SME_REGISTRY', title: 'МСП', dataDate: '2026-10-10', rowsMatched: 1 },
+          { dataset: 'sshr', source: 'FNS_PB', title: 'Численность', dataDate: '2026-09-25', rowsMatched: 1 },
+        ],
       } as never,
       saved: { listSelections: async () => [] } as never,
       analytics: { track: () => undefined } as never,
@@ -50,7 +74,7 @@ function setup(total = 4, interpreter: QueryInterpreter = rules) {
     },
     transport,
   );
-  return { bot, sent, searches };
+  return { bot, sent, searches, quoteLog };
 }
 
 const msg = (text: string, mid = `m${Math.random()}`): MaxUpdate => ({
@@ -97,6 +121,50 @@ describe('bot dialog', () => {
     const open = m.buttons.find((b) => b.text === 'Открыть подборку');
     expect(open?.url).toBe('https://max.ru/proveren_bot?startapp=st_testtoken');
     expect(m.buttons.map((b) => b.text)).toContain('Новый поиск');
+  });
+
+  it('после подтверждения: «Отобрал 3 из 3» и три лучших с основанием типа в чате', async () => {
+    ctx = setup(3);
+    await ctx.bot.handle(msg('Нужна фанера ФСФ 18 мм, Татарстан, только производитель'));
+    await ctx.bot.handle(press('CONFIRM_QUERY'));
+    const m = lastSend(ctx.sent);
+    expect(m.text).toContain('Отобрал 3 из 3. Лучшие три:');
+    expect(m.text).toContain('1. ООО «Тест 1», Республика Татарстан — производитель (заявлено в реестре МСП)');
+    expect(m.text).toContain('2. ООО «Тест 2», Республика Татарстан — производитель (по декларации ЕАЭС N RU Д-RU.TEST)');
+    expect(m.text).toContain('3. ООО «Тест 3», Республика Татарстан — производитель (тип не подтверждён, определён по ОКВЭД)');
+    expect(m.buttons.find((b) => b.text.startsWith('Запросить КП'))?.payload).toBe('QUOTE:st_testtoken');
+  });
+
+  it('приветствие: строка источников с датами и кнопка «Пример запроса»', async () => {
+    await ctx.bot.handle(msg('/start'));
+    const m = lastSend(ctx.sent);
+    expect(m.text).toContain('Источники: реестр МСП на 10.10.2026 · налоги и численность ФНС на 25.09.2026.');
+    expect(m.buttons.map((b) => b.text)).toContain('Пример запроса');
+    await ctx.bot.handle(press('EXAMPLE'));
+    expect(ctx.sent.filter((x) => x.kind === 'send').map((x) => x.text).join('\n')).toContain('Пример запроса:');
+  });
+
+  it('«Запросить КП»: текст для каждого поставщика, ссылки на поиск контактов, запись для опроса', async () => {
+    ctx = setup(3);
+    await ctx.bot.handle(msg('Нужна фанера ФСФ 18 мм, Татарстан, только производитель'));
+    await ctx.bot.handle(press('CONFIRM_QUERY'));
+    const before = ctx.sent.length;
+    await ctx.bot.handle(press('QUOTE'));
+    const texts = ctx.sent.slice(before).filter((x) => x.kind === 'send').map((x) => x.text);
+    expect(texts).toHaveLength(4);
+    expect(texts[1]).toContain('yandex.ru/search');
+    expect(texts[1]).toContain('Здравствуйте! КП');
+    expect(ctx.quoteLog).toHaveLength(1);
+  });
+
+  it('опрос «Поставщики ответили?»: при «нет» бот присылает подборку заново', async () => {
+    ctx = setup(3);
+    await ctx.bot.sendQuoteFollowUp({ id: 'q1', userId: '7', query: { text: 'фанера' } as never, supplierIds: [] });
+    const ask = lastSend(ctx.sent);
+    expect(ask.text).toContain('Поставщики ответили?');
+    expect(ask.buttons.map((b) => b.payload)).toEqual(['QUOTE_ANSWER:yes:q1', 'QUOTE_ANSWER:no:q1']);
+    await ctx.bot.handle(press('QUOTE_ANSWER:no:q1'));
+    expect(lastSend(ctx.sent).text).toContain('Отобрал 3 из 3');
   });
 
   it('уточняет только недостающее: регион и тип поставщика (не больше трёх вопросов)', async () => {

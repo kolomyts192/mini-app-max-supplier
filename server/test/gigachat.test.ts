@@ -3,7 +3,7 @@ import { GigaChatClient } from '../src/ai/gigachat/gigachatClient';
 import { GigaChatTokenProvider } from '../src/ai/gigachat/tokenProvider';
 import { DisabledLlmClient, type LlmCall, LlmUnavailableError } from '../src/ai/llm';
 import { CombinedQueryInterpreter, GigaChatQueryInterpreter, InterpretationCache } from '../src/ai/queryInterpreter';
-import { CitationVerifier, GigaChatRelevanceJudge, RankingCache } from '../src/ai/relevanceJudge';
+import { GigaChatRelevanceJudge, RankingCache } from '../src/ai/relevanceJudge';
 import { searchQuerySchema } from '../src/domain/types';
 import { attributeLabel } from '../src/search/attributes';
 import type { SupplierSummary } from '../src/search/dto';
@@ -99,6 +99,17 @@ describe('клиент GigaChat', () => {
     expect(((await slow) as LlmUnavailableError).reason).toBe('timeout');
   });
 
+  it('серия сбоев оценки кандидатов не отключает разбор запроса', async () => {
+    const fake = new FakeGigaChat();
+    fake.replies = [{ status: 400 }, { status: 400 }, { status: 400 }, { args: { ok: true } }];
+    const c = client(fake);
+    const rank = { ...call(), purpose: 'rank' as const };
+    for (let i = 0; i < 3; i++) await c.callFunction(rank).catch(() => undefined);
+    await expect(c.callFunction(rank)).rejects.toMatchObject({ reason: 'unavailable' });
+    expect(fake.chatCalls).toHaveLength(3);
+    expect((await c.callFunction(call())).args).toEqual({ ok: true });
+  });
+
   it('без ключа — клиент-заглушка отказывает сразу', async () => {
     await expect(new DisabledLlmClient().callFunction()).rejects.toMatchObject({ reason: 'disabled' });
   });
@@ -126,6 +137,13 @@ describe('разбор запроса GigaChat', () => {
     expect(prompt.functions[0].parameters.properties.product_id.enum).toContain('plywood');
   });
 
+  it('простой запрос правила разбирают сами, без обращения к GigaChat', async () => {
+    const fake = new FakeGigaChat();
+    const combined = new CombinedQueryInterpreter(rules, interpreter(fake), new InterpretationCache(new FakeRedis() as never), silentLog, 2000);
+    expect(await combined.interpret('фанера 18 мм')).toMatchObject({ source: 'rules', status: 'skipped', product: { productId: 'plywood' } });
+    expect(fake.chatCalls).toHaveLength(0);
+  });
+
   it('выдуманный товар отбрасывается; без ИИ, при сбое и из кэша — понятный статус', async () => {
     const fake = new FakeGigaChat();
     fake.replies = [
@@ -133,11 +151,13 @@ describe('разбор запроса GigaChat', () => {
       { status: 500 },
     ];
     const combined = new CombinedQueryInterpreter(rules, interpreter(fake), new InterpretationCache(new FakeRedis() as never), silentLog, 2000);
-    const first = await combined.interpret('кухонная мебель на заказ в Казани');
+    const vague = 'где всё для готовки дома, с доставкой в Казани';
+    expect(rules.interpretSync(vague).product?.productId ?? null).toBeNull();
+    const first = await combined.interpret(vague);
     expect(first).toMatchObject({ source: 'ai', status: 'ok', product: { productId: 'kitchen_furniture' }, region: { code: '16' }, clarify: 'Какой материал фасадов?' });
-    expect((await combined.interpret('кухонная мебель на заказ в Казани')).status).toBe('cached');
-    const failed = await combined.interpret('фанера 18 мм');
-    expect(failed).toMatchObject({ source: 'rules', status: 'error', product: { productId: 'plywood' } });
+    expect((await combined.interpret(vague)).status).toBe('cached');
+    const failed = await combined.interpret('подберите что-нибудь для обшивки стен');
+    expect(failed).toMatchObject({ source: 'rules', status: 'error' });
 
     const bogus = new FakeGigaChat();
     bogus.replies = [{ args: { product_id: 'gold_bars', category_id: 'none', product_confidence: 0.99, region: '', attributes: [], terms: [], clarify: '' } }];
@@ -154,13 +174,13 @@ describe('оценка кандидатов GigaChat', () => {
     }) as unknown as SupplierSummary;
   const q = searchQuerySchema.parse({ text: 'фанера 18 мм', productId: 'plywood', categoryId: 'lumber', interpreted: true });
 
-  it('оценка учитывается только с цитатой из сведений именно этого кандидата', async () => {
+  it('оценка учитывается только со ссылкой на строку сведений именно этого кандидата', async () => {
     const fake = new FakeGigaChat();
     fake.replies = [{
       args: {
         items: [
-          { id: 'c1', relevance: 3, reason: 'Декларация на фанеру', quote: 'Фанера общего назначения' },
-          { id: 'c2', relevance: 3, reason: 'Фанера марки ФСФ', quote: 'фанера ФСФ толщиной 18 мм' },
+          { id: 'c1', relevance: 3, basis: 'c1.2', reason: 'Декларация на фанеру' },
+          { id: 'c2', relevance: 3, basis: 'c1.1', reason: 'Фанера марки ФСФ' },
         ],
       },
     }];
@@ -172,16 +192,20 @@ describe('оценка кандидатов GigaChat', () => {
     ]);
     expect(status).toBe('ok');
     expect([...verdicts.keys()]).toEqual(['a']);
+    expect(verdicts.get('a')).toMatchObject({ quote: 'Фанера общего назначения ГОСТ 3916.1', source: 'Декларация (действует)' });
     const user = JSON.parse(fake.chatCalls[0].body).messages[1].content as string;
-    expect(user).toContain('[c1]');
+    expect(user).toContain('Товар: Фанера\nЗапрос: «фанера»\n\nКандидаты:\nc1.1 ОКВЭД: 16.21.11 Производство фанеры\nc1.2 Декларация (действует): Фанера общего назначения');
+    expect(user).not.toContain('18 мм');
     expect(user).not.toContain('ООО «Тест-Краска»');
   });
 
   it('применение оценки: среднее правил и ИИ в компоненте товара, объяснение ИИ вторым пунктом', () => {
-    const s = withVerdict(summary('a', 'Фанера'), { relevance: 1, reason: 'Только смежная продукция', quote: 'Фанера' });
+    const s = withVerdict(summary('a', 'Фанера'), { relevance: 1, reason: 'Только смежная продукция', quote: 'Панели на основе фанеры', source: 'Сертификат (действует)' });
     expect(s.scoreComponents.productMatch).toBe(0.7);
     expect(s.score).toBe(0.73);
     expect(s.reasons[1]).toEqual({ kind: 'warn', text: 'оценка ИИ: Только смежная продукция', source: 'ai' });
-    expect(new CitationVerifier().verify('«фанера   ОБЩЕГО назначения»', { key: 'c1', supplierId: 'a', lines: ['Декларация (действует): Фанера общего назначения'] })).toBe(true);
+    // характеристики сверяют правила: противоречие снижает и оценку ИИ (1,0 × 0,7)
+    const mismatch = { ...summary('a', 'Фанера'), match: { basis: 'document', label: '', evidence: null, attributes: [{ label: 'марка ФСФ', status: 'mismatch', quote: 'марки ФК', ref: null }], ai: null } };
+    expect(withVerdict(mismatch as SupplierSummary, { relevance: 3, reason: 'Фанера', quote: 'Фанера', source: 'ОКВЭД' }).scoreComponents.productMatch).toBe(0.8);
   });
 });

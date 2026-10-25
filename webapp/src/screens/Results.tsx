@@ -5,11 +5,11 @@ import { ApiError, api, NetworkError } from '../api/client';
 import type { SearchQuery, SearchResponse, SupplierSummary } from '../api/types';
 import { EMPTY_QUERY } from '../api/types';
 import { haptic } from '../bridge';
-import { SourceProgress, SourcesSheet } from '../components/sheets';
+import { QuoteSheet, SourceProgress, SourcesSheet } from '../components/sheets';
 import { SupplierCard } from '../components/SupplierCard';
 import { Button, CardSkeleton, Chip, Notice, StateView, StickyActionBar } from '../components/ui';
 import { decodeQuery, encodeQuery, MAX_COMPARE, queryKey, useApp } from '../store';
-import { aiLine, attributeLabel, countsLine, datesLine, suppliersWord } from '../utils';
+import { aiLine, attributeLabel, checkedLine, countsLine, datesLine, headline } from '../utils';
 
 const MIN_LOADING_MS = 1200;
 
@@ -87,6 +87,7 @@ export function ResultsScreen() {
   const [phase, setPhase] = useState<'loading' | 'done' | 'error' | 'offline'>(cached ? 'done' : 'loading');
   const [errorText, setErrorText] = useState('');
   const [sourcesFor, setSourcesFor] = useState<SupplierSummary | null>(null);
+  const [quoteFor, setQuoteFor] = useState<SupplierSummary[]>([]);
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<SearchResponse['sources'] | null>(null);
   const actions = useSupplierActions(data?.searchId ?? null, data?.query ?? query);
@@ -154,20 +155,25 @@ export function ResultsScreen() {
     }
   };
 
+  // Фильтры по реестрам, которые не подключены, не показываем: они ничего бы не отфильтровали
+  const has = (group: string) => !data || (data.coverage?.connected ?? []).includes(group);
+
   const quickFilters = (
     <div className="chips chips--scroll" role="group" aria-label="Фильтры">
       <Chip selected={query.supplierType === 'MANUFACTURER_ONLY'} onClick={() => patch({ supplierType: query.supplierType === 'MANUFACTURER_ONLY' ? 'ANY' : 'MANUFACTURER_ONLY' })}>
         Только производитель
       </Chip>
-      <Chip selected={query.certificate === 'REQUIRED'} onClick={() => patch({ certificate: query.certificate === 'REQUIRED' ? 'PREFERRED' : 'REQUIRED' })}>
-        Нужны документы
-      </Chip>
+      {has('fsa') && (
+        <Chip selected={query.certificate === 'REQUIRED'} onClick={() => patch({ certificate: query.certificate === 'REQUIRED' ? 'PREFERRED' : 'REQUIRED' })}>
+          Нужны документы
+        </Chip>
+      )}
       {regionSet && (
         <Chip selected={query.strictRegion} onClick={() => patch({ strictRegion: !query.strictRegion })}>
           Строго в регионе
         </Chip>
       )}
-      {(!category || category.industrial) && (
+      {has('gisp') && (!category || category.industrial) && (
         <Chip selected={query.russianOnly} onClick={() => patch({ russianOnly: !query.russianOnly })}>
           ПП РФ №719
         </Chip>
@@ -230,7 +236,7 @@ export function ResultsScreen() {
     <div className={`screen ${withBar ? (actions.compare.length ? 'screen--with-bar-and-float' : 'screen--with-bar') : ''}`}>
       <h1 className="t-display num">
         {data.results.length
-          ? `${data.counts.matched.toLocaleString('ru-RU')}${data.counts.isEstimate ? '+' : ''} ${suppliersWord(data.counts.matched)}`
+          ? headline(data.counts)
           : 'Ничего не найдено'}
       </h1>
       <div className="row row--between" style={{ marginTop: 4 }}>
@@ -266,11 +272,15 @@ export function ResultsScreen() {
       )}
 
       <div className="t-caption muted num" style={{ marginTop: 8 }}>
-        {data.results.length ? countsLine(data.counts) : 'Ничего не подошло'}
-        {' · '}
-        {label.supplierType}
+        {data.results.length ? [countsLine(data.counts), label.supplierType].filter(Boolean).join(' · ') : 'Ничего не подошло'}
         <br />
         {datesLine(data.dates, data.demo ? data.dataDate : null)}
+        {checkedLine(data.coverage?.checked) && (
+          <>
+            <br />
+            {checkedLine(data.coverage?.checked)}
+          </>
+        )}
         {ai && (
           <>
             <br />
@@ -287,7 +297,7 @@ export function ResultsScreen() {
           </Notice>
         )}
         {data.warnings
-          .filter((w) => !w.startsWith('Часть сведений') && !w.startsWith('Демо'))
+          .filter((w) => !w.startsWith('Часть сведений') && !w.startsWith('Демо') && !w.startsWith('Реальные компании'))
           .map((w) => (
             <Notice key={w} tone="info">
               {w}
@@ -358,6 +368,7 @@ export function ResultsScreen() {
                 inCompare={actions.compare.some((c) => c.id === s.id)}
                 onSave={() => actions.onSave(s)}
                 saved={actions.savedSupplierIds.has(s.id)}
+                onQuote={() => setQuoteFor([s])}
                 onSources={() => {
                   void api.event('sources_opened', data.searchId, { supplierId: s.id });
                   setSourcesFor(s);
@@ -387,6 +398,8 @@ export function ResultsScreen() {
           </StickyActionBar>
         </>
       )}
+
+      <QuoteSheet suppliers={quoteFor} query={data.query} searchId={data.searchId} source="results" onClose={() => setQuoteFor([])} />
 
       <SourcesSheet
         s={sourcesFor}

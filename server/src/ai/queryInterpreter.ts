@@ -7,7 +7,7 @@ import type { RedisClient } from '../infra/redis';
 import type { Logger } from '../logger';
 import { matchRegion, type ProductMatch } from '../parser/queryParser';
 import { attributeLabel } from '../search/attributes';
-import type { Interpretation, QueryInterpreter, RuleQueryInterpreter } from '../search/interpretation';
+import { type Interpretation, type QueryInterpreter, RuleQueryInterpreter } from '../search/interpretation';
 import { type LlmClient, type LlmFunction, LlmUnavailableError } from './llm';
 
 /** Ответ модели по схеме функции extract_purchase_query. */
@@ -114,7 +114,7 @@ export class GigaChatQueryInterpreter {
           params: {
             product_id: 'plywood', category_id: 'lumber', product_confidence: 0.95, region: 'Москва',
             attributes: [{ name: 'толщина', value: 18, unit: 'мм' }, { name: 'марка', text: 'ФСФ' }],
-            supplier_type: 'unknown', terms: ['фанера', 'фанера ФСФ', 'фанера березовая', 'фанера ламинированная'], clarify: '',
+            supplier_type: 'unknown', terms: ['фанера', 'фанера ФСФ'], clarify: '',
           },
         },
         {
@@ -222,6 +222,7 @@ const attrKey = (a: Attribute) => (a.text ? normalize(a.text) : [a.value, ...a.v
 
 /**
  * Разбор с ИИ и откатом на правила. Правила дают точное: регион, объём, явный тип поставщика;
+ * ИИ подключается, только когда правила не узнали товар уверенно (`RuleQueryInterpreter.confident`).
  * ИИ — смысл: товар, характеристики с правильными названиями, слова для документов и уточняющий вопрос.
  * Ошибка, таймаут или занятость модели не ломают разбор — остаётся результат правил.
  */
@@ -237,6 +238,7 @@ export class CombinedQueryInterpreter implements QueryInterpreter {
   async interpret(text: string): Promise<Interpretation> {
     const base = this.rules.interpretSync(text);
     if (!this.ai.enabled) return base;
+    if (RuleQueryInterpreter.confident(base)) return { ...base, status: 'skipped' };
     const cached = await this.cache.get(text);
     if (cached) return this.merge(base, cached, 'cached');
     try {

@@ -54,8 +54,17 @@ export class TermMatcher {
   static snippet(text: string, word: string): string {
     const clean = text.replace(/\s+/g, ' ').trim();
     const pos = Math.max(0, clean.toLowerCase().replace(/ё/g, 'е').indexOf(word));
-    const start = Math.max(0, pos - 50);
-    const end = Math.min(clean.length, start + 160);
+    let start = Math.max(0, pos - 50);
+    let end = Math.min(clean.length, start + 160);
+    // Границы — по словам: не «…азах А С», а целые слова
+    if (start > 0) {
+      const space = clean.indexOf(' ', start);
+      if (space >= 0 && space < pos) start = space + 1;
+    }
+    if (end < clean.length) {
+      const space = clean.lastIndexOf(' ', end);
+      if (space > pos) end = space;
+    }
     return `${start > 0 ? '…' : ''}${clean.slice(start, end).trim()}${end < clean.length ? '…' : ''}`;
   }
 }

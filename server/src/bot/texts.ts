@@ -2,7 +2,8 @@ import type { Catalog } from '../catalog/catalog';
 import { plural } from '../catalog/text';
 import { CERTIFICATE_LABEL, SUPPLIER_PREF_LABEL } from '../domain/types';
 import { attributeLabel } from '../search/attributes';
-import type { SearchCounts } from '../search/dto';
+import type { SearchCounts, SupplierSummary } from '../search/dto';
+import type { OpenDataImport } from '../search/service';
 import type { BotSession } from './session';
 
 export const T = {
@@ -45,6 +46,38 @@ export const T = {
   attributesNotRecognized: 'Не разобрал характеристики. Напишите, например: «18 мм, ФСФ» — или нажмите «Пропустить».',
   sourcesDown: 'Часть сведений сейчас недоступна. В подборке показаны результаты по другим источникам.',
 };
+
+const ruDate = (iso: string) => iso.split('-').reverse().join('.');
+
+/** «Источники: реестр МСП на 10.10.2026 · налоги ФНС на 25.09.2026 · Росаккредитация на 31.08.2026». Пусто, если данных нет. */
+export function sourcesLine(imports: OpenDataImport[]): string {
+  const latest = (pred: (i: OpenDataImport) => boolean) => imports.filter(pred).map((i) => i.dataDate).sort().at(-1);
+  const parts = [
+    ['реестр МСП', latest((i) => i.source === 'SME_REGISTRY')],
+    ['налоги и численность ФНС', latest((i) => i.source === 'FNS_PB')],
+    ['Росаккредитация', latest((i) => i.source.startsWith('FSA_'))],
+  ]
+    .filter(([, d]) => d)
+    .map(([name, d]) => `${name} на ${ruDate(d as string)}`);
+  return parts.length ? `Источники: ${parts.join(' · ')}.` : '';
+}
+
+/** Чем подтверждён тип поставщика: номер декларации или «заявлено в реестре МСП». */
+export function typeEvidence(s: SupplierSummary): string {
+  const byDoc = /изготовителем в (сертификате|декларации) (.+?) \(Росаккредитация/.exec(s.supplierTypeBasis ?? '');
+  if (byDoc) return `по ${byDoc[1] === 'сертификате' ? 'сертификату' : 'декларации'} ${byDoc[2]}`;
+  const decl = s.documents.items.find((d) => d.type === 'DECLARATION' && d.manufacturerInn === s.inn);
+  if (decl) return `по декларации ${decl.number}`;
+  if (s.supplierTypeBasis?.includes('в реестре МСП')) return 'заявлено в реестре МСП';
+  return 'тип не подтверждён, определён по ОКВЭД';
+}
+
+/** «Отобрал 5 из 24 320» и три лучших прямо в чате. */
+export function selectionText(shown: number, total: number, top: SupplierSummary[]): string {
+  const n = (v: number) => v.toLocaleString('ru-RU');
+  const lines = top.map((s, i) => `${i + 1}. ${s.name}, ${s.region.name} — ${s.supplierTypeLabel.toLowerCase()} (${typeEvidence(s)})`);
+  return [`Отобрал ${n(shown)} из ${n(total)}. Лучшие три:`, ...lines].join('\n');
+}
 
 export function querySummary(s: BotSession, catalog: Catalog): string {
   const lines: string[] = ['Я понял запрос так:'];
