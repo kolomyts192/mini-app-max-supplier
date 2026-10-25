@@ -33,7 +33,7 @@ export interface RiskDto {
 export interface SupplierSummary {
   id: string;
   inn: string;
-  ogrn: string;
+  ogrn: string | null;
   name: string;
   entityType: 'LEGAL_ENTITY' | 'IP';
   supplierType: SupplierType;
@@ -67,13 +67,40 @@ export interface EmptyAction {
   categories?: { id: string; name: string }[];
 }
 
+/**
+ * Сколько компаний на каждом шаге поиска. Сведения из источников собираются только для лучших совпадений
+ * по предварительному порядку, поэтому при большой категории число подходящих — нижняя оценка.
+ */
+export interface SearchCounts {
+  /** Компаний в категории с учётом региона (при строгом фильтре) и типа поставщика. */
+  total: number;
+  /** Из них проверено полностью: собраны сведения и применены все фильтры. */
+  evaluated: number;
+  /** Из проверенных прошли все фильтры. */
+  matched: number;
+  shown: number;
+  /** true — проверены не все компании категории: подходящих может быть больше, чем matched. */
+  isEstimate: boolean;
+}
+
+export interface SearchDates {
+  /** Версия реестра МСП, по которой собрана база, YYYY-MM-DD. */
+  registryDate: string | null;
+  /** Самая свежая версия налоговых наборов ФНС (численность, спецрежимы, задолженность…), YYYY-MM-DD. */
+  factsDate: string | null;
+}
+
 export interface SearchResponse {
   searchId: string;
   query: SearchQuery;
   queryLabel: { product: string; region: string; supplierType: string; volume: string | null; certificate: string };
   activeFilters: { key: string; label: string }[];
+  /** То же, что counts.total; оставлено для совместимости клиентов. */
   total: number;
+  counts: SearchCounts;
+  dates: SearchDates;
   results: SupplierSummary[];
+  /** Самая поздняя дата проверки среди показанных компаний. */
   dataDate: string | null;
   sources: SourceStatus[];
   warnings: string[];
@@ -102,7 +129,7 @@ export interface SupplierCardDto {
   general: {
     name: string;
     inn: string;
-    ogrn: string;
+    ogrn: string | null;
     kpp: string | null;
     entityType: 'LEGAL_ENTITY' | 'IP';
     legalStatus: Fact<LegalStatus> & { label: string; refreshed: boolean };

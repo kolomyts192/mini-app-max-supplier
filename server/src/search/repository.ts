@@ -22,15 +22,15 @@ function map(r: Record<string, unknown>): SupplierRow {
   };
 }
 
-/** Дедупликация по ИНН и ОГРН (одна компания — одна запись в выдаче). */
+/** Дедупликация по ИНН и ОГРН (одна компания — одна запись в выдаче). Компании без ОГРН сравниваются только по ИНН. */
 export function dedupeSuppliers(rows: SupplierRow[]): SupplierRow[] {
   const seenInn = new Set<string>();
   const seenOgrn = new Set<string>();
   const out: SupplierRow[] = [];
   for (const r of rows) {
-    if (seenInn.has(r.inn) || seenOgrn.has(r.ogrn)) continue;
+    if (seenInn.has(r.inn) || (r.ogrn && seenOgrn.has(r.ogrn))) continue;
     seenInn.add(r.inn);
-    seenOgrn.add(r.ogrn);
+    if (r.ogrn) seenOgrn.add(r.ogrn);
     out.push(r);
   }
   return out;

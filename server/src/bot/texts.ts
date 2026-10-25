@@ -1,5 +1,7 @@
 import type { Catalog } from '../catalog/catalog';
+import { plural } from '../catalog/text';
 import { CERTIFICATE_LABEL, SUPPLIER_PREF_LABEL } from '../domain/types';
+import type { SearchCounts } from '../search/dto';
 import type { BotSession } from './session';
 
 export const T = {
@@ -32,7 +34,13 @@ export const T = {
   selectionSaved: 'Подборка сохранена. Открыть её можно командой /saved',
   error: 'Что-то пошло не так. Попробуйте ещё раз через минуту или отправьте /find.',
   emptyResults: 'По запросу ничего не найдено. Попробуйте:',
-  found: (n: number, word: string) => `Нашлось ${n} ${word} по вашим параметрам.`,
+  found: (c: SearchCounts) => {
+    const n = (v: number) => v.toLocaleString('ru-RU');
+    const companies = (v: number) => `${n(v)} ${plural(v, ['компания', 'компании', 'компаний'])}`;
+    // Сведения собираются только для лучших совпадений: при большой категории не обещаем, что подошли все
+    if (c.isEstimate) return `В категории ${companies(c.total)}. Проверил ${n(c.evaluated)} лучших совпадений — подходят ${n(c.matched)}. В подборке — ${n(c.shown)} лучших.`;
+    return `По вашим параметрам подходят ${companies(c.matched)}. В подборке — ${n(c.shown)} лучших.`;
+  },
   sourcesDown: 'Часть сведений сейчас недоступна. В подборке показаны результаты по другим источникам.',
 };
 

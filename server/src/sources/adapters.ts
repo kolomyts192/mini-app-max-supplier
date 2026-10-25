@@ -1,5 +1,5 @@
 import type { Catalog, RequiredDocument } from '../catalog/catalog';
-import { productsForOkpd2 } from '../opendata/classify';
+import { productsForOkpd2 } from '../opendata/parsing/classify';
 import type { GispClient } from './gispClient';
 import { sleep } from './resilience';
 import type { TestDataStore } from './testDataStore';

@@ -87,7 +87,7 @@ export interface SourceStatus {
 export interface SupplierSummary {
   id: string;
   inn: string;
-  ogrn: string;
+  ogrn: string | null;
   name: string;
   entityType: 'LEGAL_ENTITY' | 'IP';
   supplierType: SupplierType;
@@ -120,12 +120,28 @@ export interface EmptyAction {
   categories?: { id: string; name: string }[];
 }
 
+/** Сколько компаний на каждом шаге поиска (см. SearchCounts на сервере). */
+export interface SearchCounts {
+  /** Компаний в категории с учётом региона и типа поставщика. */
+  total: number;
+  /** Проверено полностью: собраны сведения и применены все фильтры. */
+  evaluated: number;
+  /** Из проверенных прошли все фильтры. */
+  matched: number;
+  shown: number;
+  /** Проверены не все компании категории: подходящих может быть больше. */
+  isEstimate: boolean;
+}
+
 export interface SearchResponse {
   searchId: string;
   query: SearchQuery;
   queryLabel: { product: string; region: string; supplierType: string; volume: string | null; certificate: string };
   activeFilters: { key: string; label: string }[];
   total: number;
+  counts: SearchCounts;
+  /** registryDate — версия реестра МСП, factsDate — налоговых наборов ФНС (YYYY-MM-DD). */
+  dates: { registryDate: string | null; factsDate: string | null };
   results: SupplierSummary[];
   dataDate: string | null;
   sources: SourceStatus[];
@@ -173,7 +189,7 @@ export interface SupplierCard {
   general: {
     name: string;
     inn: string;
-    ogrn: string;
+    ogrn: string | null;
     kpp: string | null;
     entityType: 'LEGAL_ENTITY' | 'IP';
     legalStatus: SupplierSummary['legalStatus'];

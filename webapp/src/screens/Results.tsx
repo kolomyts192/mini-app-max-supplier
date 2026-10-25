@@ -9,7 +9,7 @@ import { SourceProgress, SourcesSheet } from '../components/sheets';
 import { SupplierCard } from '../components/SupplierCard';
 import { Button, CardSkeleton, Chip, Notice, StateView, StickyActionBar } from '../components/ui';
 import { decodeQuery, encodeQuery, MAX_COMPARE, queryKey, useApp } from '../store';
-import { formatDate, suppliersWord } from '../utils';
+import { countsLine, datesLine, suppliersWord } from '../utils';
 
 const MIN_LOADING_MS = 1200;
 
@@ -226,7 +226,9 @@ export function ResultsScreen() {
   return (
     <div className={`screen ${withBar ? (actions.compare.length ? 'screen--with-bar-and-float' : 'screen--with-bar') : ''}`}>
       <h1 className="t-display num">
-        {data.results.length ? `${data.total.toLocaleString('ru-RU')} ${suppliersWord(data.total)}` : 'Ничего не найдено'}
+        {data.results.length
+          ? `${data.counts.matched.toLocaleString('ru-RU')}${data.counts.isEstimate ? '+' : ''} ${suppliersWord(data.counts.matched)}`
+          : 'Ничего не найдено'}
       </h1>
       <div className="row row--between" style={{ marginTop: 4 }}>
         <span className="t-caption muted grow">
@@ -247,10 +249,11 @@ export function ResultsScreen() {
       <div style={{ marginTop: 8 }}>{quickFilters}</div>
 
       <div className="t-caption muted num" style={{ marginTop: 8 }}>
-        {data.dataDate ? `Данные на ${formatDate(data.dataDate)}` : 'Нет данных'}
-        {data.total > data.results.length ? ` · показаны ${data.results.length} лучших из ${data.total.toLocaleString('ru-RU')}` : ''}
+        {data.results.length ? countsLine(data.counts) : 'Ничего не подошло'}
         {' · '}
         {label.supplierType}
+        <br />
+        {datesLine(data.dates, data.demo ? data.dataDate : null)}
       </div>
 
       <div className="stack-3" style={{ marginTop: 16 }}>

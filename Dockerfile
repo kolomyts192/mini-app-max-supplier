@@ -31,6 +31,8 @@ COPY server/migrations ./migrations
 COPY server/certs ./certs
 COPY data /app/data
 COPY --from=webapp /build/webapp/dist /app/webapp/dist
+# Том opendata (архивы и отчёты импорта): новый том наследует владельца папки из образа
+RUN mkdir -p /opendata && chown node:node /opendata
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

@@ -1,9 +1,15 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { categoriesForOkved, prettyName, productsForOkpd2, titleCase } from '../src/opendata/classify';
-import { parsePaytax, parseRsmpDoc, parseSupport, shortOrgForm, shortTaxName, supplierType, supportFact } from '../src/opendata/importer';
-import { parseAttrs, streamElements, tagAttrs } from '../src/opendata/xmlStream';
+import { categoriesForOkved, productsForOkpd2 } from '../src/opendata/parsing/classify';
+import { PaytaxParser, SupportParser, SupportSummary } from '../src/opendata/parsing/fnsParsers';
+import { prettyName, shortOrgForm, shortTaxName, titleCase } from '../src/opendata/parsing/format';
+import { RsmpParser, SupplierTypeAssessor } from '../src/opendata/parsing/rsmpParser';
+import { parseAttrs, streamElements, tagAttrs } from '../src/opendata/io/xmlStream';
 import { catalog } from './helpers';
+
+const parser = new RsmpParser(catalog);
+const parseRsmpDoc = (doc: string, regions: Set<string> | null = null) => new RsmpParser(catalog, regions).parse(doc).company;
+const supplierType = (c: Parameters<SupplierTypeAssessor['assess']>[0]) => new SupplierTypeAssessor().assess(c);
 
 // Фрагменты в формате реального набора ФНС 7707329152-rsmp (структура 12.05.2026)
 const PAINT_ORG = `<Документ ИдДок="1" ДатаСост="10.09.2026" ДатаВклМСП="10.08.2016" ВидСубМСП="1" КатСубМСП="2" ПризНовМСП="2" СведСоцПред="2">
@@ -40,20 +46,23 @@ describe('xml', () => {
 
 describe('реестр МСП → поставщики', () => {
   it('производитель красок по основному ОКВЭД попадает в категорию, но тип не определён', () => {
-    const c = parseRsmpDoc(PAINT_ORG, catalog, null)!;
+    const c = parseRsmpDoc(PAINT_ORG)!;
     expect(c).toMatchObject({ inn: '5031000000', name: 'АО «ТЕСТХИМ»', entityType: 'LEGAL_ENTITY', sme: 'SMALL', regionCode: '50', regionName: 'Московская область', city: 'Старая Купавна' });
     expect(c.categories).toEqual(['paints']);
+    expect(c.matchedBy).toEqual({ okved: ['paints'], declared: [] });
     expect(supplierType(c).type).toBe('UNKNOWN');
     expect(supplierType(c).basis).toContain('Одного ОКВЭД недостаточно');
   });
 
   it('компании вне товарной вертикали отбрасываются', () => {
-    expect(parseRsmpDoc(AD_AGENCY_IP, catalog, null)).toBeNull();
+    expect(parseRsmpDoc(AD_AGENCY_IP)).toBeNull();
+    expect(parser.parse(AD_AGENCY_IP).skip).toBe('category');
   });
 
   it('заявленная продукция (ОКПД2) даёт совпадение по товару и статус «производитель по заявлению»', () => {
-    const c = parseRsmpDoc(DECLARED, catalog, null)!;
+    const c = parseRsmpDoc(DECLARED)!;
     expect(c.categories).toEqual(['fasteners']);
+    expect(c.matchedBy).toEqual({ okved: [], declared: ['fasteners'] });
     expect(c.products.map((p) => p.productId)).toEqual(expect.arrayContaining(['screws', 'bolts_nuts', 'anchors']));
     const t = supplierType(c);
     expect(t.type).toBe('MANUFACTURER');
@@ -61,12 +70,13 @@ describe('реестр МСП → поставщики', () => {
   });
 
   it('широкий ОКВЭД 23.99 без уточнения в названии не относится к категории', () => {
-    expect(parseRsmpDoc(INSULATION_WIDE, catalog, null)).toBeNull();
+    expect(parseRsmpDoc(INSULATION_WIDE)).toBeNull();
   });
 
   it('фильтр регионов', () => {
-    expect(parseRsmpDoc(PAINT_ORG, catalog, new Set(['77']))).toBeNull();
-    expect(parseRsmpDoc(PAINT_ORG, catalog, new Set(['50']))).not.toBeNull();
+    expect(parseRsmpDoc(PAINT_ORG, new Set(['77']))).toBeNull();
+    expect(new RsmpParser(catalog, new Set(['77'])).parse(PAINT_ORG).skip).toBe('region');
+    expect(parseRsmpDoc(PAINT_ORG, new Set(['50']))).not.toBeNull();
   });
 
   it('классификация ОКВЭД по коду и наименованию', () => {
@@ -93,19 +103,20 @@ const SUPPORT = `<Документ ИдДок="2" ДатаСост="15.09.2026">
 
 describe('наборы «Прозрачного бизнеса» и реестр поддержки МСП', () => {
   it('уплаченные налоги: итог за год и крупнейшие платежи', () => {
-    const f = parsePaytax(PAYTAX);
+    const f = new PaytaxParser().parse(PAYTAX);
     expect(f.value.replace(/\s/g, ' ')).toBe('3 235 496 ₽ за 2025 год');
     expect(f.notes).toMatch(/^Крупнейшие платежи: НДС — 2\s282\s495 ₽; налог на прибыль — 600\s659 ₽; пенсионные взносы — 352\s342 ₽$/);
     expect(shortTaxName('Суммы пеней')).toBe('пени');
   });
 
   it('поддержка МСП: число мер, деньги только в рублях, нарушение условий, последняя мера', () => {
-    const s = parseSupport(SUPPORT);
+    const s = new SupportSummary().add(new SupportParser().parse(SUPPORT)!);
     expect(s).toMatchObject({ count: 2, rub: 350000, violation: true });
     expect(s.last).toMatchObject({ date: '2025-04-04', form: 'Финансовая поддержка', provider: 'АО «МСП БАНК»', amount: 350000 });
-    const f = supportFact(s);
+    const f = s.toFact();
     expect(f.value.replace(/\s/g, ' ')).toBe('2 меры поддержки; 350 000 ₽ в денежном выражении; есть сведения о нарушении порядка и условий поддержки');
     expect(f.notes).toContain('04.04.2025');
+    expect(new SupportParser().innOf(SUPPORT)).toBe('7100000000');
     expect(shortOrgForm('ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ «А»')).toBe('ООО «А»');
   });
 });

@@ -5,7 +5,8 @@ import type { DocumentRow, ProductRow, RiskRow, VerificationRow } from '../sourc
 export interface SupplierRow {
   id: string;
   inn: string;
-  ogrn: string;
+  /** В реестре МСП ОГРН бывает не указан или занят другой записью. */
+  ogrn: string | null;
   kpp: string | null;
   name: string;
   entity_type: 'LEGAL_ENTITY' | 'IP';

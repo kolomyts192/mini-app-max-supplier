@@ -1,8 +1,14 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { detectDelimiter, streamCsv } from '../src/opendata/csvStream';
-import { docRank, fsaColumns, fsaRow, normalizeStatus, parseDate } from '../src/opendata/fsa';
-import { dateIn } from '../src/opendata/importer';
+import { FsaArchiveSet } from '../src/opendata/datasets/fsaDatasets';
+import { detectDelimiter, streamCsv } from '../src/opendata/io/csvStream';
+import { FsaParser } from '../src/opendata/parsing/fsaParser';
+
+const parser = new FsaParser();
+const fsaColumns = (h: string[]) => parser.columns(h);
+const fsaRow = (cells: string[], c: ReturnType<typeof fsaColumns>) => parser.row(cells, c);
+const { normalizeStatus, parseDate, rank: docRank } = FsaParser;
+const { dateIn } = FsaArchiveSet;
 
 const win1251 = (s: string) => Buffer.from(new TextEncoder().encode(s)); // UTF-8; кодировку windows-1251 проверяем отдельно ниже
 

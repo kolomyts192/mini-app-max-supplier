@@ -1,5 +1,4 @@
 import type { Catalog } from '../catalog/catalog';
-import { plural } from '../catalog/text';
 import { type CertificateRequirement, type SearchQuery, SUPPLIER_TYPE_PREFS, type SupplierTypePref, CERTIFICATE_REQUIREMENTS } from '../domain/types';
 import { botUpdates } from '../infra/metrics';
 import { hashUserId, type Logger } from '../logger';
@@ -456,9 +455,9 @@ export class BotOrchestrator {
     const userId = String(ctx.userId);
 
     const preview = await this.d.search.search(query, { userId, origin: 'bot', track: false });
-    this.d.analytics.track('bot_query_confirmed', { userId, props: { total: preview.total } });
+    this.d.analytics.track('bot_query_confirmed', { userId, props: { total: preview.counts.total, matched: preview.counts.matched } });
 
-    if (!preview.total) {
+    if (!preview.counts.shown) {
       s.state = 'SHOWING_RESULTS';
       await this.d.sessions.save(s);
       const patchable = (preview.empty?.actions ?? []).filter((a) => a.patch && ['relax_type', 'relax_type_any', 'all_russia', 'relax_docs'].includes(a.id));
@@ -473,10 +472,10 @@ export class BotOrchestrator {
     await this.d.sessions.save(s);
 
     const open = this.open(token.token);
-    const lines = [T.found(preview.total, plural(preview.total, ['поставщик', 'поставщика', 'поставщиков']))];
+    const lines = [T.found(preview.counts)];
     if (preview.sources.some((x) => x.status === 'failed')) lines.push(T.sourcesDown);
     lines.push(open ? T.ready : T.readyNoUsername);
-    this.d.log.info({ user: hashUserId(userId), total: preview.total }, 'search token issued');
+    this.d.log.info({ user: hashUserId(userId), ...preview.counts }, 'search token issued');
     await this.send(ctx, lines.join('\n\n'), readyKeyboard(open));
   }
 

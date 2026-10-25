@@ -275,7 +275,7 @@ export function SupplierScreen() {
         }}
         aria-label={`Скопировать ИНН ${g.inn}`}
       >
-        ИНН {g.inn} · ОГРН{g.entityType === 'IP' ? 'ИП' : ''} {g.ogrn} <Copy size={14} strokeWidth={2} aria-hidden />
+        ИНН {g.inn}{g.ogrn ? ` · ОГРН${g.entityType === 'IP' ? 'ИП' : ''} ${g.ogrn}` : ''} <Copy size={14} strokeWidth={2} aria-hidden />
       </button>
       <div className="supplier-card__meta" style={{ marginTop: 4 }}>
         <RoleBadge type={s.supplierType} label={s.supplierTypeLabel} />

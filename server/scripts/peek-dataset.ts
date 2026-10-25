@@ -2,7 +2,7 @@
 // Запуск: docker compose run --rm tools sh -c "cd server && npx tsx scripts/peek-dataset.ts paytax 2"
 import fs from 'node:fs';
 import path from 'node:path';
-import { forEachZipEntry, streamElements } from '../src/opendata/xmlStream';
+import { forEachZipEntry, streamElements } from '../src/opendata/io/xmlStream';
 
 async function main() {
   const [id, n = '2'] = process.argv.slice(2);

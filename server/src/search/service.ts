@@ -10,7 +10,7 @@ import type { AnalyticsService } from '../services/analytics';
 import type { AuditEntry, AuditService } from '../services/audit';
 import type { EgrulService } from '../services/egrul';
 import type { SourceRegistry, SourceStatus } from '../sources/registry';
-import type { EmptyAction, FinancialsDto, SearchResponse, SupplierCardDto, SupplierSummary } from './dto';
+import type { EmptyAction, FinancialsDto, SearchDates, SearchResponse, SupplierCardDto, SupplierSummary } from './dto';
 import { deriveFacts } from './facts';
 import type { Coverage, Evidence, SupplierRow } from './model';
 import { rowProvenance, toCard, toSummary } from './present';
@@ -28,6 +28,15 @@ export interface OpenDataImport {
 }
 
 export const MAX_RESULTS = 5;
+
+/** Источники налоговых наборов ФНС: их версия — «дата налоговых сведений» в выдаче. */
+const FACT_SOURCES = new Set(['FNS_PB', 'FNS_REVEXP', 'SME_SUPPORT']);
+
+/** Дата реестра МСП и самая свежая дата налоговых наборов из журнала импорта. */
+export function searchDates(imports: OpenDataImport[]): SearchDates {
+  const facts = imports.filter((i) => FACT_SOURCES.has(i.source)).map((i) => i.dataDate).sort();
+  return { registryDate: imports.find((i) => i.dataset === 'rsmp')?.dataDate ?? null, factsDate: facts.at(-1) ?? null };
+}
 
 export interface SearchContext {
   userId: string | null;
@@ -217,13 +226,16 @@ export class SearchService {
         this.d.analytics.track('search_started', { userId: ctx.userId, searchId, props: { total: 0, shown: 0, latencyMs: Date.now() - started, origin: ctx.origin, reason: 'product_not_recognized' } });
       }
       stopTimer();
+      const imports = await this.imports();
       return {
         ...base,
         total: 0,
+        counts: { total: 0, evaluated: 0, matched: 0, shown: 0, isEstimate: false },
+        dates: searchDates(imports),
         results: [],
         dataDate: null,
         sources: [],
-        dataSources: await this.imports(),
+        dataSources: imports,
         warnings: [],
         empty: {
           reason: 'product_not_recognized',
@@ -265,9 +277,6 @@ export class SearchService {
       const summary = this.evaluate(s, evidence[s.inn], q, coverage, now, exclusions);
       if (summary) passed.push(summary);
     }
-    // Кандидаты сверх лимита предварительного отбора не проверялись адаптерами, но подходят по категории
-    const notEvaluated = Math.max(0, inCategory - candidates.length);
-
     passed.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
     passed = await this.withEgrul(passed, q, coverage, now, exclusions);
     const results = passed.slice(0, MAX_RESULTS);
@@ -299,10 +308,14 @@ export class SearchService {
     }
     this.d.audit.record(results.map((r) => this.auditEntry(r, 'search', ctx)));
 
+    // Кандидаты сверх лимита предварительного отбора не проверялись адаптерами: подходящих может быть больше
+    const total = Math.max(inCategory, candidates.length);
     return {
       ...base,
       demo: results.some((r) => r.isManualTestData),
-      total: passed.length + notEvaluated,
+      total,
+      counts: { total, evaluated: candidates.length, matched: passed.length, shown: results.length, isEstimate: candidates.length < total },
+      dates: searchDates(imports),
       results,
       dataDate,
       sources: statuses,

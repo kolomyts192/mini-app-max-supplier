@@ -47,6 +47,8 @@ const schema = z.object({
   OPENDATA_DIR: z.string().default('../opendata-cache'),
   /** Регионы импорта из реестра МСП: пусто — вся Россия, иначе коды через запятую. */
   OPENDATA_REGIONS: z.string().default(''),
+  /** Отчёты диагностики, импорта и проверки базы. Пусто — <OPENDATA_DIR>/reports. */
+  OPENDATA_REPORTS_DIR: opt(z.string()),
   /** Какие данные участвуют в поиске: real — только официальные, test — ручная тестовая база, all — обе. */
   SEARCH_DATA: z.enum(['real', 'test', 'all']).default('real'),
   /** Доступ к витринам ГИСП (выдаётся по заявке организации). */

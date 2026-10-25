@@ -9,7 +9,7 @@ import { MissingProductSheet, RegionSheet } from '../components/sheets';
 import { Button, Chip, ICON_S, IconButton, StickyActionBar, ThemeToggle, Toggle } from '../components/ui';
 import { fmt, useOverview } from '../hooks';
 import { encodeQuery, useApp } from '../store';
-import { formatDate, plural } from '../utils';
+import { formatDate, plural, sourcesList } from '../utils';
 
 const SUPPLIER_TYPES: { value: SupplierTypePref; label: string }[] = [
   { value: 'ANY', label: 'Любой' },
@@ -69,6 +69,11 @@ export function SearchScreen() {
     : sortedCategories.filter((c, i) => i < TOP_CATEGORIES || c.id === form.categoryId);
   const rsmp = session?.data?.imports.find((i) => i.dataset === 'rsmp');
   const realData = session?.data?.mode !== 'test' && !!rsmp;
+  // Какие реестры ещё не дают сведений: по журналу импорта и живым API (ЕГРЮЛ по ключу DaData)
+  const connected = new Set([...(session?.data?.imports ?? []).map((i) => i.source), ...(session?.data?.live ?? [])]);
+  const pending = sourcesList(
+    [['FNS_EGRUL'], ['GISP', 'GISP_PP719'], ['FSA_DECL', 'FSA_CERT']].filter((ids) => !ids.some((id) => connected.has(id))).map((ids) => ids[0]),
+  );
 
   const [volumeText, setVolumeText] = useState(form.volume ? String(form.volume.value).replace('.', ',') : '');
   const [volumeUnit, setVolumeUnit] = useState(form.volume?.unit ?? unitDefault);
@@ -178,7 +183,7 @@ export function SearchScreen() {
           )}
         </div>
         <div className="hero__meta">
-          {realData && rsmp ? `Данные ФНС на ${formatDate(rsmp.dataDate)} · ЕГРЮЛ, ГИСП и Росаккредитация подключаются` : 'Демо-версия: вымышленные компании из тестовой базы'}
+          {realData && rsmp ? `Данные ФНС на ${formatDate(rsmp.dataDate)}${pending ? ` · ${pending} подключаются` : ''}` : 'Демо-версия: вымышленные компании из тестовой базы'}
         </div>
       </section>
 

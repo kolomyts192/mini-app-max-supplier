@@ -58,6 +58,21 @@ export function sourcesList(ids: string[] | undefined): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} и ${names.at(-1)}` : names[0] ?? '';
 }
 
+/** «Подошло 37 · проверено 150 из 1 694 · показаны 5»: сведения собираются только для лучших совпадений категории. */
+export function countsLine(c: { total: number; evaluated: number; matched: number; shown: number; isEstimate: boolean }): string {
+  const n = (v: number) => v.toLocaleString('ru-RU');
+  const shown = c.shown === c.matched ? 'показаны все' : `показаны ${n(c.shown)}`;
+  if (c.isEstimate) return `Подошло ${n(c.matched)} · проверено ${n(c.evaluated)} из ${n(c.total)} · ${shown}`;
+  return c.matched === c.total ? `Подошло ${n(c.matched)} · ${shown}` : `Подошло ${n(c.matched)} из ${n(c.total)} · ${shown}`;
+}
+
+/** «Реестр МСП на 10.10.2026 · налоги на 25.09.2026»; для тестовой базы — дата проверки показанных компаний. */
+export function datesLine(dates: { registryDate: string | null; factsDate: string | null }, fallback: string | null): string {
+  const parts = [dates.registryDate && `Реестр МСП на ${formatDate(dates.registryDate)}`, dates.factsDate && `налоги на ${formatDate(dates.factsDate)}`].filter(Boolean);
+  if (parts.length) return parts.join(' · ');
+  return fallback ? `Данные на ${formatDate(fallback)}` : 'Нет данных';
+}
+
 export function suppliersWord(n: number): string {
   return plural(n, ['поставщик', 'поставщика', 'поставщиков']);
 }

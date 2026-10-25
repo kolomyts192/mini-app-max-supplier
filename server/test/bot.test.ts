@@ -31,6 +31,7 @@ function setup(total = 4) {
           searches.push(q);
           return {
             total,
+            counts: { total, evaluated: total, matched: total, shown: Math.min(total, 5), isEstimate: false },
             sources: [],
             empty: total ? null : { actions: [{ id: 'relax_type', label: 'Убрать фильтр «только производитель»', patch: {} }] },
           };
@@ -160,5 +161,15 @@ describe('bot dialog', () => {
     await ctx.bot.handle(press('SET_REGION:50', 'В каком регионе ищем?'));
     const answer = ctx.sent.find((s) => s.kind === 'answer');
     expect(answer?.text).toContain('→ Московская область');
+  });
+});
+
+describe('честные цифры в боте', () => {
+  it('при неполной проверке категории не обещает, что подошли все', async () => {
+    const { T } = await import('../src/bot/texts');
+    expect(T.found({ total: 1694, evaluated: 150, matched: 37, shown: 5, isEstimate: true }).replace(/\s/g, ' ')).toBe(
+      'В категории 1 694 компании. Проверил 150 лучших совпадений — подходят 37. В подборке — 5 лучших.',
+    );
+    expect(T.found({ total: 4, evaluated: 4, matched: 4, shown: 4, isEstimate: false })).toBe('По вашим параметрам подходят 4 компании. В подборке — 4 лучших.');
   });
 });
