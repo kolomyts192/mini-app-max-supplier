@@ -36,7 +36,8 @@ export class RsmpParser {
     if (this.regions && !this.regions.has(regionCode)) return { company: null, skip: 'region' };
 
     const declared = allTagAttrs(doc, 'СвПрод').map((p) => ({ code: p.КодПрод ?? '', name: p.НаимПрод ?? '' }));
-    const byOkved = this.classifier.categoriesForOkved(main?.КодОКВЭД, main?.НаимОКВЭД);
+    const okvedProducts = this.classifier.productsForOkved(main?.КодОКВЭД, main?.НаимОКВЭД);
+    const byOkved = [...new Set([...this.classifier.categoriesForOkved(main?.КодОКВЭД, main?.НаимОКВЭД), ...okvedProducts.map((p) => p.categoryId)])];
     const byDeclared = new Set<string>();
     const products: CompanyProduct[] = [];
     for (const d of declared) {
@@ -65,6 +66,7 @@ export class RsmpParser {
         declared,
         categories: [...categories],
         products,
+        okvedProducts,
         matchedBy: { okved: byOkved, declared: [...byDeclared] },
       },
     };

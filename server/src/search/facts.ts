@@ -1,15 +1,22 @@
 import type { Catalog } from '../catalog/catalog';
 import type { Fact, LegalStatus, Provenance, SearchQuery, SmeStatus } from '../domain/types';
 import type { DocumentRow, ProductRow, RiskRow, VerificationRow } from '../sources/types';
+import { type AttributeCheck, AttributeMatcher, type EvidenceText } from './attributes';
 import { type Coverage, type Evidence, OFFICIAL_ONLY_BY_ACCESS, type ProductMatchLevel, type RegionMatch, type SupplierRow } from './model';
+import { TermMatcher } from './terms';
+
+const attributeMatcher = new AttributeMatcher();
 
 export interface DerivedFacts {
   /** detail — уточнение статуса из ЕГРЮЛ (ликвидация, банкротство, реорганизация). */
   legalStatus: Fact<LegalStatus> & { refreshed: boolean; detail?: string | null };
   sme: Fact<SmeStatus> & { refreshed: boolean };
   productMatch: ProductMatchLevel;
-  /** declared — продукция заявлена в реестре МСП; okved — только по основному ОКВЭД; catalog — ручная база/ГИСП. */
-  productBasis: 'declared' | 'okved' | 'catalog';
+  productBasis: ProductBasis;
+  /** Чем подтверждён товар: цитата из документа, заявленной продукции или вида деятельности. */
+  productEvidence: ProductEvidence | null;
+  /** Характеристики запроса, сверенные с документами и сведениями о деятельности. */
+  attributeChecks: AttributeCheck[];
   matchedProductTitles: string[];
   /** Источники, не подключённые для этой компании (нет разрешённого доступа). */
   uncovered: string[];
@@ -22,6 +29,25 @@ export interface DerivedFacts {
   discrepancies: string[];
   sourcesFailed: string[];
   checkedAt: string;
+}
+
+/**
+ * Основание совпадения по товару, от сильного к слабому: документ Росаккредитации, в названии продукции которого есть
+ * слова запроса, продукция, заявленная в реестре МСП, запись ГИСП или ручной базы, ОКВЭД, называющий сам товар,
+ * ОКВЭД группы товаров, документ, лишь привязанный к товару справочника при импорте, слово товара в названии
+ * основного вида деятельности, только категория.
+ */
+export type ProductBasis = 'document' | 'declared' | 'catalog' | 'okved_exact' | 'okved_group' | 'document_linked' | 'okved_text' | 'category';
+
+export interface ProductEvidence {
+  quote: string;
+  /** В тексте доказательства есть слова запроса («фанера» в названии ОКВЭД или продукции). */
+  named?: boolean;
+  /** Слово товара в начале названия продукции: документ на сам товар, а не на изделие из него. */
+  head?: boolean;
+  /** Номер документа или код ОКВЭД. */
+  ref: string | null;
+  source: EvidenceText['source'];
 }
 
 export interface DerivedDocument {
@@ -129,27 +155,7 @@ export function deriveFacts(
 
   const category = catalog.category(query?.categoryId ?? null);
   const inCategory = s.products.filter((p) => !category || p.category_id === category.id);
-  let productMatch: ProductMatchLevel = 'none';
-  let matchedProductTitles: string[] = [];
-  if (query?.productId) {
-    const exact = inCategory.filter((p) => p.product_id === query.productId);
-    if (exact.length) {
-      productMatch = 'product';
-      matchedProductTitles = exact.map((p) => p.title);
-    } else if (inCategory.length) {
-      productMatch = 'category';
-      matchedProductTitles = inCategory.map((p) => p.title);
-    }
-  } else if (category && inCategory.length) {
-    productMatch = 'category';
-    matchedProductTitles = inCategory.map((p) => p.title);
-  }
-  const matchedRecords = inCategory.filter((p) => productMatch !== 'product' || p.product_id === query?.productId);
-  const productBasis: DerivedFacts['productBasis'] = matchedRecords.some((p) => p.origin === 'SME_DECLARED')
-    ? 'declared'
-    : matchedRecords.length && matchedRecords.every((p) => p.origin === 'OKVED')
-      ? 'okved'
-      : 'catalog';
+  const terms = query ? TermMatcher.forQuery(query, catalog) : new TermMatcher([]);
 
   const okvedMain = fieldValue(ev.fns?.rows, 'okved_main')?.value ?? s.okved_main?.code;
   const okvedAdd = (fieldValue(ev.fns?.rows, 'okved_additional')?.value.split(',') ?? s.okved_additional.map((o) => o.code)).filter(Boolean);
@@ -168,18 +174,22 @@ export function deriveFacts(
     const isActive = row.status === 'ACTIVE' && notExpired;
     const isOfficiallyVerified = isActive && !row.is_manual_test_data;
     const productCategory = catalog.product(row.product_id)?.categoryId;
-    const match: DerivedDocument['match'] =
-      query?.productId && row.product_id === query.productId
-        ? 'product'
-        : row.product_id && (!category || productCategory === category.id)
-          ? query?.productId
-            ? 'category'
-            : 'product'
-          : 'other';
+    // Документ на товар: привязан к нему при импорте или в названии продукции есть слова товара
+    const onProduct = query?.productId ? row.product_id === query.productId || !!terms.find(row.product_name) : !!terms.find(row.product_name);
+    const match: DerivedDocument['match'] = onProduct
+      ? 'product'
+      : row.product_id && (!category || productCategory === category.id)
+        ? query?.productId
+          ? 'category'
+          : 'product'
+        : 'other';
     let statusLabel = DOC_STATUS_LABEL[row.status];
     if (row.status === 'ACTIVE' && !notExpired) statusLabel = 'Срок действия истёк';
     return { row, isActive, isOfficiallyVerified, countsAsActive: isOfficiallyVerified || (isActive && demoTrustManual), match, statusLabel };
   });
+
+  const product = productFacts(s, query, inCategory, documents, terms);
+  const attributeChecks = query?.attributes?.length ? attributeMatcher.check(query.attributes, evidenceTexts(s, documents, product.productMatch === 'product')) : [];
 
   if (!ev.rnp) sourcesFailed.push('FAS_RNP');
   if (!ev.fedresurs) sourcesFailed.push('FEDRESURS');
@@ -201,9 +211,8 @@ export function deriveFacts(
   return {
     legalStatus,
     sme,
-    productMatch,
-    productBasis,
-    matchedProductTitles,
+    ...product,
+    attributeChecks,
     uncovered,
     regionMatch: regionMatchOf(s.region_code, query?.regionCode ?? null, catalog),
     okvedMatch,
@@ -215,4 +224,72 @@ export function deriveFacts(
     sourcesFailed: [...new Set(sourcesFailed)],
     checkedAt,
   };
+}
+
+/** Тексты, в которых проверяются характеристики: документы о товаре — первыми. */
+function evidenceTexts(s: SupplierRow, documents: DerivedDocument[], productMatched: boolean): EvidenceText[] {
+  const out: EvidenceText[] = documents
+    .filter((d) => d.row.product_name)
+    .map((d) => ({ text: d.row.product_name!, source: 'document' as const, ref: d.row.number, relevant: d.match === 'product' }));
+  for (const p of s.products.filter((x) => x.origin !== 'OKVED')) out.push({ text: p.title, source: 'declared', ref: p.product_id ?? '', relevant: productMatched });
+  if (s.okved_main?.name) out.push({ text: s.okved_main.name, source: 'okved', ref: s.okved_main.code, relevant: false });
+  return out;
+}
+
+/** Совпадение по товару и его основание — от документа на товар до одной категории. */
+function productFacts(
+  s: SupplierRow,
+  query: SearchQuery | null,
+  inCategory: SupplierRow['products'],
+  documents: DerivedDocument[],
+  terms: TermMatcher,
+): Pick<DerivedFacts, 'productMatch' | 'productBasis' | 'productEvidence' | 'matchedProductTitles'> {
+  const productId = query?.productId ?? null;
+  const onProduct = documents.filter((d) => d.match === 'product' && (productId || !terms.empty));
+  const named = onProduct.map((d) => ({ d, hit: terms.find(d.row.product_name) })).filter((x) => x.hit);
+  // Документ на сам товар («Фанера…») сильнее документа на изделие из него («Панели… из фанеры»), действующий — сильнее
+  const rank = (x: (typeof named)[number]) => Number(x.hit!.head) * 2 + Number(x.d.countsAsActive);
+  const best = [...named].sort((a, b) => rank(b) - rank(a))[0];
+  const doc = best?.d;
+  const linked = onProduct.find((d) => d.countsAsActive) ?? onProduct[0];
+  const records = productId ? s.products.filter((p) => p.product_id === productId) : [];
+  const titles = (list: SupplierRow['products']) => list.map((p) => p.title);
+  const okved = s.okved_main;
+
+  if (doc && (productId || !terms.empty)) {
+    const kind = doc.row.document_type === 'DECLARATION' ? 'декларация' : 'сертификат';
+    const quote = best!.hit!.quote;
+    return {
+      productMatch: 'product',
+      productBasis: 'document',
+      productEvidence: { quote, ref: `${kind} ${doc.row.number}`, source: 'document', named: true, head: best!.hit!.head },
+      matchedProductTitles: [doc.row.product_name ?? ''],
+    };
+  }
+  const declared = records.find((p) => p.origin === 'SME_DECLARED');
+  if (declared) return { productMatch: 'product', productBasis: 'declared', productEvidence: { quote: declared.title, ref: null, source: 'declared' }, matchedProductTitles: titles(records) };
+  const catalogRecord = records.find((p) => p.origin === 'GISP' || p.origin === 'MANUAL_TEST_DATA');
+  if (catalogRecord) return { productMatch: 'product', productBasis: 'catalog', productEvidence: null, matchedProductTitles: titles(records) };
+  const byOkved = records.find((p) => p.origin === 'OKVED');
+  if (byOkved && okved) {
+    return {
+      productMatch: 'product',
+      productBasis: byOkved.characteristics?.exact ? 'okved_exact' : 'okved_group',
+      productEvidence: { quote: okved.name, ref: okved.code, source: 'okved', named: !!terms.find(okved.name) },
+      matchedProductTitles: titles(records),
+    };
+  }
+  if (linked && productId) {
+    const kind = linked.row.document_type === 'DECLARATION' ? 'декларация' : 'сертификат';
+    return {
+      productMatch: 'product',
+      productBasis: 'document_linked',
+      productEvidence: { quote: (linked.row.product_name ?? '').slice(0, 160), ref: `${kind} ${linked.row.number}`, source: 'document' },
+      matchedProductTitles: [linked.row.product_name ?? ''],
+    };
+  }
+  const text = productId && okved ? terms.find(okved.name) : null;
+  if (text && okved && inCategory.length) return { productMatch: 'product', productBasis: 'okved_text', productEvidence: { quote: okved.name, ref: okved.code, source: 'okved' }, matchedProductTitles: titles(inCategory) };
+  if (inCategory.length) return { productMatch: 'category', productBasis: 'category', productEvidence: null, matchedProductTitles: titles(inCategory) };
+  return { productMatch: 'none', productBasis: 'category', productEvidence: null, matchedProductTitles: [] };
 }

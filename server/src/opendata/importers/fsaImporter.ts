@@ -18,8 +18,8 @@ import type { TransactionRunner } from '../persistence/transactionRunner';
 import { type DatasetImporter, secondsSince } from './datasetImporter';
 import type { SupplierIndexProvider } from './enrichmentImporter';
 
-/** Документов одного вида на компанию после объединения срезов: действующие и самые свежие. */
-const DOCS_PER_SUPPLIER = 30;
+/** Документов одного вида на компанию после объединения срезов: действующие и самые свежие. Поиск по товару находит документ и у крупных компаний. */
+const DOCS_PER_SUPPLIER = 100;
 
 /** Документы поставщиков с ограничением числа на компанию: лишние отбрасываются по ходу чтения, чтобы не держать миллионы строк. */
 class SupplierDocuments {

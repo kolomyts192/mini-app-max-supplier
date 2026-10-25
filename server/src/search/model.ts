@@ -33,7 +33,8 @@ export interface SupplierRow {
   employees?: number | null;
   /** Доходы за последний год по бухотчётности — для полноты профиля. */
   last_revenue?: number | null;
-  products: { product_id: string | null; category_id: string; title: string; origin?: string }[];
+  /** characteristics.exact — товар по ОКВЭД, который называет именно этот товар. */
+  products: { product_id: string | null; category_id: string; title: string; origin?: string; characteristics?: { basis?: string; okved?: string; exact?: boolean } }[];
 }
 
 /**
@@ -65,4 +66,6 @@ export type ProductMatchLevel = 'product' | 'category' | 'none';
 export interface Reason {
   kind: 'ok' | 'warn' | 'info';
   text: string;
+  /** ai — объяснение составлено ИИ по доказательствам из реестров. */
+  source?: 'ai';
 }

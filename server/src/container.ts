@@ -1,3 +1,6 @@
+import { createLlmClient } from './ai/factory';
+import { CombinedQueryInterpreter, GigaChatQueryInterpreter, InterpretationCache } from './ai/queryInterpreter';
+import { DisabledRelevanceJudge, GigaChatRelevanceJudge, RankingCache, type RelevanceJudge } from './ai/relevanceJudge';
 import { BotOrchestrator, type BotTransport } from './bot/orchestrator';
 import { BotNotifier, maxTransport, Poller, UpdateIngestor } from './bot/runtime';
 import { SessionStore } from './bot/session';
@@ -10,6 +13,7 @@ import type { Logger } from './logger';
 import { MaxApi } from './max/client';
 import type { MaxUpdate } from './max/types';
 import { SupplierRepository } from './search/repository';
+import { type QueryInterpreter, RuleQueryInterpreter } from './search/interpretation';
 import { SupplierResolver } from './search/resolver';
 import { SearchService } from './search/service';
 import { AnalyticsService } from './services/analytics';
@@ -61,6 +65,15 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
   const sources = new SourceRegistry(store, catalog, redis, log, { mode: 'snapshot', simulatedFailures: config.simulatedFailures, gisp, egrulLive: egrul.enabled });
   const analytics = new AnalyticsService(db, log);
   const audit = new AuditService(db, log);
+  const rules = new RuleQueryInterpreter(catalog);
+  // GigaChat: разбор запроса и оценка кандидатов; без ключа — правила и формула ТЗ
+  const llm = createLlmClient(config, log);
+  const interpreter: QueryInterpreter = llm.enabled
+    ? new CombinedQueryInterpreter(rules, new GigaChatQueryInterpreter(llm, catalog), new InterpretationCache(redis), log, config.GIGACHAT_TIMEOUT_MS)
+    : rules;
+  const judge: RelevanceJudge = llm.enabled
+    ? new GigaChatRelevanceJudge(llm, catalog, new RankingCache(redis), log, { deadlineMs: config.GIGACHAT_TIMEOUT_MS, top: config.GIGACHAT_RERANK_TOP })
+    : new DisabledRelevanceJudge();
   const search = new SearchService({
     db,
     repo: new SupplierRepository(db),
@@ -74,6 +87,8 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
     egrulTop: config.EGRUL_TOP_CANDIDATES,
     demoTrustManual: config.DEMO_TRUST_MANUAL_DATA,
     dataMode: config.SEARCH_DATA,
+    interpreter,
+    judge,
     now: overrides.now,
   });
   const overview = new OverviewService(db, catalog, analytics, () => search.imports(), () => search.dataMode, sources.officialLive);
@@ -95,7 +110,7 @@ export function createContainer(config: Config, log: Logger, overrides: { transp
           async answer() {},
         });
   const orchestrator = new BotOrchestrator(
-    { sessions, catalog, tokens, search, saved, analytics, log, openAppMode: config.MAX_OPEN_APP_BUTTON, botUsername: () => botUsername.value },
+    { sessions, catalog, tokens, search, saved, analytics, log, openAppMode: config.MAX_OPEN_APP_BUTTON, botUsername: () => botUsername.value, interpreter, rules },
     transport,
   );
   const notifier = new BotNotifier(api, log);

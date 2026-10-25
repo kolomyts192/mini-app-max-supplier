@@ -12,6 +12,8 @@ export interface ProductWriteRow {
   source: string;
   sourceUrl: string;
   checkedAt: string;
+  /** Основание записи: для товара по ОКВЭД — код и точность («16.21.11 называет фанеру»). */
+  characteristics?: Record<string, unknown>;
 }
 
 /** Пакетная замена продукции поставщиков, пришедшей из реестра МСП. Записи ГИСП и тестовой базы не трогает. */
@@ -21,10 +23,11 @@ export class ProductBatchWriter extends RecordsetWriter {
     await client.query(`DELETE FROM product_records WHERE origin IN ('OKVED', 'SME_DECLARED') AND supplier_id = ANY($1::uuid[])`, [supplierIds]);
     return this.insertChunks(
       client,
-      `INSERT INTO product_records (supplier_id, category_id, product_id, title, okpd2, origin, source, source_url, is_manual_test_data, updated_at)
-       SELECT p.supplier_id, p.category_id, p.product_id, p.title, p.okpd2, p.origin, p.source, p.source_url, false, p.checked_at
+      `INSERT INTO product_records (supplier_id, category_id, product_id, title, okpd2, origin, source, source_url, is_manual_test_data, updated_at, characteristics)
+       SELECT p.supplier_id, p.category_id, p.product_id, p.title, p.okpd2, p.origin, p.source, p.source_url, false, p.checked_at, coalesce(p.characteristics, '{}')
          FROM jsonb_to_recordset($1::jsonb) AS p(
-           supplier_id uuid, category_id text, product_id text, title text, okpd2 text, origin text, source text, source_url text, checked_at timestamptz
+           supplier_id uuid, category_id text, product_id text, title text, okpd2 text, origin text, source text, source_url text, checked_at timestamptz,
+           characteristics jsonb
          )`,
       rows.map((r) => ({
         supplier_id: r.supplierId,
@@ -36,6 +39,7 @@ export class ProductBatchWriter extends RecordsetWriter {
         source: r.source,
         source_url: r.sourceUrl,
         checked_at: r.checkedAt,
+        characteristics: r.characteristics ?? {},
       })),
     );
   }

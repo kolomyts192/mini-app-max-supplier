@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { Catalog } from '../catalog/catalog';
 import { plural } from '../catalog/text';
-import { CERTIFICATE_LABEL, type SearchQuery, SUPPLIER_PREF_LABEL } from '../domain/types';
+import { CERTIFICATE_LABEL, type SearchQuery, searchQuerySchema, SUPPLIER_PREF_LABEL } from '../domain/types';
 import type { Db } from '../infra/db';
 import { searches, searchLatency } from '../infra/metrics';
 import { hashUserId, type Logger } from '../logger';
@@ -10,11 +10,15 @@ import type { AnalyticsService } from '../services/analytics';
 import type { AuditEntry, AuditService } from '../services/audit';
 import type { EgrulService } from '../services/egrul';
 import type { SourceRegistry, SourceStatus } from '../sources/registry';
-import type { EmptyAction, FinancialsDto, SearchDates, SearchResponse, SupplierCardDto, SupplierSummary } from './dto';
+import type { RelevanceJudge, RelevanceVerdict } from '../ai/relevanceJudge';
+import type { AiStepStatus, EmptyAction, FinancialsDto, SearchDates, SearchResponse, SupplierCardDto, SupplierSummary } from './dto';
+import { attributeLabel } from './attributes';
 import { deriveFacts } from './facts';
+import { applyInterpretation, type InterpretationStatus, type QueryInterpreter } from './interpretation';
 import type { Coverage, Evidence, SupplierRow } from './model';
 import { rowProvenance, toCard, toSummary } from './present';
-import { buildReasons, hardFilter, scoreSupplier } from './ranking';
+import { buildReasons, hardFilter, scoreSupplier, WEIGHTS } from './ranking';
+import { TermMatcher } from './terms';
 import type { DataMode, SupplierRepository } from './repository';
 import type { SupplierResolver } from './resolver';
 
@@ -28,6 +32,19 @@ export interface OpenDataImport {
 }
 
 export const MAX_RESULTS = 5;
+
+/** Оценка ИИ 0–3 → компонент «совпадение товара». */
+const AI_PRODUCT_SCORE = [0.3, 0.5, 0.8, 1] as const;
+
+/** Применяет проверенную оценку ИИ: компонент «совпадение товара» — среднее правил и ИИ, плюс объяснение. */
+export function withVerdict(s: SupplierSummary, v: RelevanceVerdict): SupplierSummary {
+  const rules = s.scoreComponents.productMatch ?? 0;
+  const productMatch = Math.round(((rules + AI_PRODUCT_SCORE[v.relevance]) / 2) * 1000) / 1000;
+  const score = Math.round((s.score + WEIGHTS.productMatch * (productMatch - rules)) * 1000) / 1000;
+  const reasons = [...s.reasons];
+  reasons.splice(1, 0, { kind: v.relevance >= 2 ? 'ok' : 'warn', text: `оценка ИИ: ${v.reason}`, source: 'ai' });
+  return { ...s, score, scoreComponents: { ...s.scoreComponents, productMatch }, match: { ...s.match, ai: v }, reasons };
+}
 
 /** Налоговые наборы ФНС и отчётность: их версия — «дата налоговых сведений» в выдаче (реестр поддержки МСП — не налоги). */
 const FACT_SOURCES = new Set(['FNS_PB', 'FNS_REVEXP']);
@@ -60,6 +77,10 @@ export interface SearchServiceDeps {
   egrulTop?: number;
   demoTrustManual: boolean;
   dataMode?: DataMode;
+  /** Разбор свободного текста из мини-приложения (бот передаёт уже разобранный запрос). */
+  interpreter: QueryInterpreter;
+  /** Оценка лучших кандидатов ИИ; без ключа GigaChat — порядок по формуле ТЗ. */
+  judge: RelevanceJudge;
   now?: () => Date;
 }
 
@@ -139,6 +160,28 @@ export class SearchService {
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
   }
 
+  /**
+   * Оценка лучших кандидатов ИИ по доказательствам из реестров. Корректирует только компонент «совпадение товара»
+   * (среднее оценки правил и оценки ИИ), остальные компоненты формулы ТЗ не меняются, никто не исключается.
+   * Предпросмотр в боте (нужно только число) и запрос по одной категории без товара ИИ не оценивает.
+   */
+  private async withAiJudge(passed: SupplierSummary[], rows: SupplierRow[], q: SearchQuery, ctx: SearchContext): Promise<{ list: SupplierSummary[]; status: AiStepStatus }> {
+    if (ctx.track === false) return { list: passed, status: 'skipped' };
+    if (!this.d.judge.enabled) return { list: passed, status: 'disabled' };
+    if (!q.productId && !q.attributes?.length && !q.terms?.length) return { list: passed, status: 'skipped' };
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const top = passed.filter((s) => byId.has(s.id)).map((summary) => ({ summary, row: byId.get(summary.id)! }));
+    const { verdicts, status } = await this.d.judge.judge(q, top);
+    if (!verdicts.size) return { list: passed, status };
+    const list = passed
+      .map((s) => {
+        const v = verdicts.get(s.id);
+        return v ? withVerdict(s, v) : s;
+      })
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
+    return { list, status };
+  }
+
   /** Свежие сведения ЕГРЮЛ перед показом карточки или сравнения. Возвращает строки поставщиков с учётом обновления. */
   private async refreshRows(rows: SupplierRow[]): Promise<SupplierRow[]> {
     if (!this.d.egrul?.enabled) return rows;
@@ -194,6 +237,7 @@ export class SearchService {
     out.push({ key: 'region', label: q.strictRegion ? `${l.region}, строго` : l.region });
     if (q.supplierType !== 'ANY') out.push({ key: 'supplierType', label: l.supplierType });
     if (l.volume) out.push({ key: 'volume', label: l.volume });
+    (q.attributes ?? []).forEach((a, i) => out.push({ key: `attribute:${i}`, label: attributeLabel(a) }));
     if (q.certificate === 'REQUIRED') out.push({ key: 'certificate', label: 'нужны документы' });
     if (q.russianOnly) out.push({ key: 'russianOnly', label: 'ПП РФ №719' });
     return out;
@@ -208,13 +252,22 @@ export class SearchService {
     return w;
   }
 
+  /** Свободный текст, который ещё никто не разбирал: строка поиска мини-приложения. */
+  private async interpret(input: SearchQuery): Promise<{ query: SearchQuery; status: InterpretationStatus | 'skipped' }> {
+    if (input.interpreted || !input.text.trim()) return { query: input, status: 'skipped' };
+    const interpretation = await this.d.interpreter.interpret(input.text);
+    return { query: applyInterpretation(input, interpretation), status: interpretation.status };
+  }
+
   async search(input: SearchQuery, ctx: SearchContext): Promise<SearchResponse> {
     const stopTimer = searchLatency.startTimer();
     const started = Date.now();
     const now = this.now();
-    const q = this.normalizeQuery(input);
+    const interpreted = await this.interpret(input);
+    const q = this.normalizeQuery(interpreted.query);
     const searchId = crypto.randomUUID();
-    const base = { searchId, query: q, queryLabel: this.describe(q), activeFilters: this.activeFilters(q), demo: false };
+    const ai: SearchResponse['ai'] = { interpretation: interpreted.status, ranking: 'skipped' };
+    const base = { searchId, query: q, queryLabel: this.describe(q), activeFilters: this.activeFilters(q), demo: false, ai };
 
     if (!q.categoryId) {
       const similar = matchProduct(q.text, this.d.catalog);
@@ -258,6 +311,7 @@ export class SearchService {
       strictRegion: q.strictRegion,
       neighbors: q.regionCode ? this.d.catalog.neighbors(q.regionCode) : [],
       manufacturerOnly: q.supplierType === 'MANUFACTURER_ONLY',
+      terms: TermMatcher.forQuery(q, this.d.catalog).terms,
     };
     const [candidates, inCategory, coverage, imports] = await Promise.all([
       this.d.repo.candidates(candidateOptions),
@@ -279,6 +333,9 @@ export class SearchService {
     }
     passed.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'ru'));
     passed = await this.withEgrul(passed, q, coverage, now, exclusions);
+    const judged = await this.withAiJudge(passed, candidates, q, ctx);
+    passed = judged.list;
+    ai.ranking = judged.status;
     const results = passed.slice(0, MAX_RESULTS);
     const dataDate = results.map((r) => r.checkedAt).sort().at(-1) ?? null;
     const latencyMs = Date.now() - started;
@@ -369,8 +426,7 @@ export class SearchService {
       scope,
     );
     const coverage = await this.coverage();
-    const effective: SearchQuery =
-      q ?? { text: '', productId: null, categoryId: null, regionCode: null, strictRegion: false, supplierType: 'ANY', volume: null, certificate: 'PREFERRED', russianOnly: false };
+    const effective: SearchQuery = q ?? searchQuerySchema.parse({});
     const items = rows.map((s) => {
       const ev = evidence[s.inn];
       const qq = effective.categoryId ? effective : { ...effective, categoryId: s.products[0]?.category_id ?? null };

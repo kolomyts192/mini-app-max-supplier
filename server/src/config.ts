@@ -63,6 +63,20 @@ const schema = z.object({
   EGRUL_MAX_AGE_DAYS: z.coerce.number().int().positive().default(7),
   /** Для скольких лучших кандидатов выдачи запрашивать ЕГРЮЛ во время поиска. */
   EGRUL_TOP_CANDIDATES: z.coerce.number().int().min(0).max(30).default(10),
+  /** GigaChat: разбор запроса и объяснение выдачи. Без ключа поиск работает на правилах. */
+  GIGACHAT_ENABLED: bool(true),
+  /** «Ключ авторизации» из личного кабинета (Base64 от Client ID:Client Secret). */
+  GIGACHAT_AUTH_KEY: opt(z.string().min(20)),
+  GIGACHAT_SCOPE: z.enum(['GIGACHAT_API_PERS', 'GIGACHAT_API_B2B', 'GIGACHAT_API_CORP']).default('GIGACHAT_API_PERS'),
+  GIGACHAT_MODEL: z.string().default('GigaChat-2-Pro'),
+  GIGACHAT_API_URL: z.string().url().default('https://api.giga.chat/v1'),
+  GIGACHAT_AUTH_URL: z.string().url().default('https://ngw.devices.sberbank.ru:9443/api/v2/oauth'),
+  /** Физлицу доступен один поток, юрлицу — до десяти. */
+  GIGACHAT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
+  /** Сколько ждать ИИ во время поиска; дольше — выдача без ИИ. */
+  GIGACHAT_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(4000),
+  /** Сколько лучших кандидатов ИИ оценивает и объясняет. */
+  GIGACHAT_RERANK_TOP: z.coerce.number().int().min(0).max(50).default(30),
   DATA_DIR: z.string().default('../data'),
   MIGRATIONS_DIR: z.string().default('./migrations'),
   WEBAPP_DIST: z.string().default('../webapp/dist'),

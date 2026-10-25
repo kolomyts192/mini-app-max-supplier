@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BotOrchestrator, type BotTransport } from '../src/bot/orchestrator';
 import { SessionStore } from '../src/bot/session';
 import type { MaxUpdate, NewMessageBody } from '../src/max/types';
+import { RuleQueryInterpreter } from '../src/search/interpretation';
 import { catalog, FakeRedis, silentLog } from './helpers';
+
+const rules = new RuleQueryInterpreter(catalog);
 
 interface Sent {
   kind: 'send' | 'answer';
@@ -42,6 +45,8 @@ function setup(total = 4) {
       log: silentLog,
       openAppMode: 'link',
       botUsername: () => 'proveren_bot',
+      interpreter: rules,
+      rules,
     },
     transport,
   );

@@ -10,15 +10,16 @@ import {
   matchSupplierType,
   matchVolume,
   PRODUCT_CONFIDENCE_THRESHOLD,
-  parseQuery,
   type ProductMatch,
   SUPPLIER_TYPE_CONFIDENCE_THRESHOLD,
 } from '../parser/queryParser';
+import type { Interpretation, QueryInterpreter, RuleQueryInterpreter } from '../search/interpretation';
 import type { SearchService } from '../search/service';
 import type { AnalyticsService } from '../services/analytics';
 import type { SavedService } from '../services/saved';
 import type { SearchTokenService } from '../services/searchToken';
 import {
+  attributesKeyboard,
   CB,
   categoriesKeyboard,
   cb,
@@ -51,6 +52,10 @@ export interface BotDeps {
   log: Logger;
   openAppMode: 'link' | 'open_app';
   botUsername: () => string | null;
+  /** Разбор свободного текста: ИИ с откатом на правила. */
+  interpreter: QueryInterpreter;
+  /** Правила — для коротких ответов на уточнения (характеристики, регион). */
+  rules: RuleQueryInterpreter;
 }
 
 interface Ctx {
@@ -188,8 +193,14 @@ export class BotOrchestrator {
         if (this.looksLikeNewQuery(text)) return this.newQuery(ctx, text);
         return this.send(ctx, T.askSupplierType, supplierTypeKeyboard());
       }
+      case 'WAITING_ATTRIBUTES': {
+        if (this.looksLikeNewQuery(text)) return this.newQuery(ctx, text);
+        const attrs = this.d.rules.attributes(text, s.product ? { ...s.product, productId: s.product.product_id, categoryId: s.product.category_id } : null);
+        s.attributes = attrs.length ? attrs : [{ name: 'характеристика', value: null, values: [], unit: null, text: text.slice(0, 60) }];
+        return this.next(ctx, s);
+      }
       case 'WAITING_PRODUCT': {
-        const parsed = parseQuery(text, this.d.catalog);
+        const parsed = await this.d.interpreter.interpret(text);
         if (parsed.product && parsed.product.confidence >= PRODUCT_CONFIDENCE_THRESHOLD) {
           this.applyParsed(s, parsed, text, false);
           return this.next(ctx, s);
@@ -212,6 +223,10 @@ export class BotOrchestrator {
       case CB.VIEW_SAVED:
         await this.ack(ctx, 'Сохранённые подборки');
         return this.showSaved(ctx);
+      case CB.SKIP_ATTRIBUTES:
+        await this.ack(ctx, 'Пропустить');
+        s.attributes_asked = true;
+        return this.next(ctx, s);
       case CB.CHANGE_QUERY:
         await this.ack(ctx, 'Изменить параметры');
         s.editing = true;
@@ -343,7 +358,7 @@ export class BotOrchestrator {
     return null;
   }
 
-  private applyParsed(s: BotSession, p: ReturnType<typeof parseQuery>, text: string, replace: boolean): void {
+  private applyParsed(s: BotSession, p: Interpretation, text: string, replace: boolean): void {
     if (replace) {
       s.product = null;
       s.region = null;
@@ -351,6 +366,10 @@ export class BotOrchestrator {
       s.supplier_type = null;
       s.certificate_requirement = null;
       s.wholesale = null;
+      s.attributes = [];
+      s.terms = [];
+      s.clarify = null;
+      s.attributes_asked = false;
       s.clarifications_asked = 0;
       s.editing = false;
       s.query_text = text;
@@ -371,15 +390,18 @@ export class BotOrchestrator {
     if (p.supplierType && p.supplierTypeConfidence >= SUPPLIER_TYPE_CONFIDENCE_THRESHOLD) s.supplier_type = p.supplierType;
     if (p.certificate) s.certificate_requirement = p.certificate;
     if (p.wholesale !== null) s.wholesale = p.wholesale;
+    if (p.attributes.length) s.attributes = p.attributes;
+    if (p.terms.length) s.terms = p.terms;
+    s.clarify = p.clarify;
   }
 
   private async newQuery(ctx: Ctx, text: string): Promise<void> {
     const s = await this.session(ctx);
-    const parsed = parseQuery(text, this.d.catalog);
+    const parsed = await this.d.interpreter.interpret(text);
     this.applyParsed(s, parsed, text, true);
     this.d.analytics.track('bot_query_parsed', {
       userId: String(ctx.userId),
-      props: { missing: parsed.missing, productConfidence: parsed.product?.confidence ?? 0 },
+      props: { productConfidence: parsed.product?.confidence ?? 0, attributes: parsed.attributes.length, source: parsed.source, status: parsed.status },
     });
     if (!parsed.product || parsed.product.confidence < PRODUCT_CONFIDENCE_THRESHOLD) return this.askProduct(ctx, s, parsed.productCandidates);
     return this.next(ctx, s);
@@ -405,6 +427,14 @@ export class BotOrchestrator {
         await this.d.sessions.save(s);
         return this.send(ctx, `${querySummary(s, this.d.catalog)}\n\n${T.askSupplierType}`, supplierTypeKeyboard());
       }
+    }
+    // Характеристики уточняем, только если разбор предложил вопрос и лимит уточнений не исчерпан; вопрос можно пропустить
+    if (s.clarify && !s.attributes.length && !s.attributes_asked && s.clarifications_asked < MAX_CLARIFICATIONS) {
+      s.clarifications_asked += 1;
+      s.attributes_asked = true;
+      s.state = 'WAITING_ATTRIBUTES';
+      await this.d.sessions.save(s);
+      return this.send(ctx, `${querySummary(s, this.d.catalog)}\n\n${s.clarify}`, attributesKeyboard());
     }
     return this.askConfirm(ctx, s);
   }
@@ -441,6 +471,9 @@ export class BotOrchestrator {
       volume: s.volume ? { value: s.volume.value, unit: s.volume.unit, operator: s.volume.mode === 'from' ? 'gte' : s.volume.mode === 'exact' ? 'eq' : 'lte' } : null,
       certificate: s.certificate_requirement ?? 'PREFERRED',
       russianOnly: false,
+      attributes: s.attributes ?? [],
+      terms: s.terms ?? [],
+      interpreted: true,
     };
   }
 

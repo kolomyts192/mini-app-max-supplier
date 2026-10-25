@@ -38,6 +38,8 @@ export interface Company {
   declared: DeclaredProduct[];
   categories: string[];
   products: CompanyProduct[];
+  /** Товары справочника по основному ОКВЭД; exact — код называет именно этот товар. */
+  okvedProducts: { productId: string; categoryId: string; exact: boolean }[];
   /** Чем обоснована каждая категория: основным ОКВЭД или заявленной продукцией (для диагностики покрытия). */
   matchedBy: { okved: string[]; declared: string[] };
 }

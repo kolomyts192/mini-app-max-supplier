@@ -42,6 +42,7 @@ function company(over: Partial<Company> = {}): Company {
     declared: [],
     categories: ['fasteners'],
     products: [],
+    okvedProducts: [],
     matchedBy: { okved: ['fasteners'], declared: [] },
     ...over,
   };

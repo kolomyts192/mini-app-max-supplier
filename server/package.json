@@ -13,6 +13,8 @@
     "test:e2e": "vitest run --dir test/e2e",
     "gen:data": "tsx scripts/generate-test-data.ts",
     "opendata": "tsx src/opendata/cli.ts",
+    "search:eval": "tsx scripts/search-eval.ts",
+    "gigachat:check": "tsx scripts/gigachat-check.ts",
     "max:me": "tsx scripts/max-cli.ts me",
     "max:webhook:set": "tsx scripts/max-cli.ts webhook:set",
     "max:webhook:list": "tsx scripts/max-cli.ts webhook:list",

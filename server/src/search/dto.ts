@@ -1,5 +1,7 @@
 import type { Fact, LegalStatus, Provenance, SearchQuery, SmeStatus, SupplierType } from '../domain/types';
 import type { SourceStatus } from '../sources/registry';
+import type { AttributeStatus } from './attributes';
+import type { ProductBasis, ProductEvidence } from './facts';
 import type { ProductMatchLevel, Reason, RegionMatch } from './model';
 
 export interface DocumentDto {
@@ -30,6 +32,17 @@ export interface RiskDto {
   provenance: Provenance;
 }
 
+/** Совпадение с запросом: основание, доказательство и характеристики — подпись в выдаче и раздел карточки. */
+export interface MatchDto {
+  basis: ProductBasis;
+  /** «подтверждено документом», «по ОКВЭД товара»… */
+  label: string;
+  evidence: ProductEvidence | null;
+  attributes: { label: string; status: AttributeStatus; quote: string | null; ref: string | null }[];
+  /** Оценка ИИ (0–3) и объяснение — только с цитатой, найденной в доказательствах. */
+  ai: { relevance: number; reason: string; quote: string } | null;
+}
+
 export interface SupplierSummary {
   id: string;
   inn: string;
@@ -44,6 +57,7 @@ export interface SupplierSummary {
   city: string | null;
   regionMatch: RegionMatch;
   product: { titles: string[]; match: ProductMatchLevel };
+  match: MatchDto;
   legalStatus: Fact<LegalStatus> & { label: string; refreshed: boolean };
   sme: Fact<SmeStatus> & { label: string; refreshed: boolean };
   gisp: { found: boolean; records: number; pp719: boolean; provenance: Provenance | null };
@@ -71,6 +85,8 @@ export interface EmptyAction {
  * Сколько компаний на каждом шаге поиска. Сведения из источников собираются только для лучших совпадений
  * по предварительному порядку, поэтому при большой категории число подходящих — нижняя оценка.
  */
+export type AiStepStatus = 'ok' | 'cached' | 'disabled' | 'timeout' | 'error' | 'skipped';
+
 export interface SearchCounts {
   /** Компаний в категории с учётом региона (при строгом фильтре) и типа поставщика. */
   total: number;
@@ -102,6 +118,11 @@ export interface SearchResponse {
   results: SupplierSummary[];
   /** Самая поздняя дата проверки среди показанных компаний. */
   dataDate: string | null;
+  /**
+   * Участие ИИ: interpretation — разбор текста запроса, ranking — оценка кандидатов и объяснения.
+   * ok/cached — с ИИ; disabled/timeout/error — без ИИ (по правилам); skipped — не требовалось.
+   */
+  ai: { interpretation: AiStepStatus; ranking: AiStepStatus };
   sources: SourceStatus[];
   warnings: string[];
   empty: null | { reason: 'product_not_recognized' | 'no_results'; message: string; actions: EmptyAction[] };

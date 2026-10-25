@@ -52,3 +52,25 @@ export const maxApiErrors = new client.Counter({
   labelNames: ['method', 'status'],
   registers: [registry],
 });
+
+export const llmRequests = new client.Counter({
+  name: 'pp_llm_requests_total',
+  help: 'Запросы к языковой модели по назначению (разбор, оценка) и исходу',
+  labelNames: ['purpose', 'outcome'],
+  registers: [registry],
+});
+
+export const llmTokens = new client.Counter({
+  name: 'pp_llm_tokens_total',
+  help: 'Токены языковой модели: prompt — запрос, completion — ответ',
+  labelNames: ['purpose', 'kind'],
+  registers: [registry],
+});
+
+export const llmLatency = new client.Histogram({
+  name: 'pp_llm_latency_seconds',
+  help: 'Время ответа языковой модели вместе с ожиданием свободного потока',
+  labelNames: ['purpose'],
+  buckets: [0.25, 0.5, 1, 2, 3, 4, 6, 10],
+  registers: [registry],
+});

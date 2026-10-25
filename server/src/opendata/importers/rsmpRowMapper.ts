@@ -55,8 +55,21 @@ export class RsmpRowMapper {
       const product = (p: Omit<ByInn<ProductWriteRow>, 'inn' | 'source' | 'sourceUrl' | 'checkedAt'>) =>
         rows.products.push({ ...p, inn: c.inn, source: this.source.id, sourceUrl: this.source.url, checkedAt });
       const withProducts = new Set(c.products.map((p) => p.categoryId));
+      const declared = new Set(c.products.map((p) => p.productId));
       for (const p of c.products) {
         product({ categoryId: p.categoryId, productId: p.productId, title: p.title, okpd2: this.catalog.product(p.productId)?.okpd2 ?? null, origin: 'SME_DECLARED' });
+      }
+      // Товар по основному ОКВЭД: «16.21.11 Производство фанеры» — фанера, а не вся категория «Пиломатериалы»
+      for (const p of c.okvedProducts.filter((x) => !declared.has(x.productId))) {
+        product({
+          categoryId: p.categoryId,
+          productId: p.productId,
+          title: `Основной вид деятельности: ${c.okvedMain.name}`,
+          okpd2: null,
+          origin: 'OKVED',
+          characteristics: { basis: 'okved', okved: c.okvedMain.code, exact: p.exact },
+        });
+        withProducts.add(p.categoryId);
       }
       for (const categoryId of c.categories.filter((x) => !withProducts.has(x))) {
         product({ categoryId, productId: null, title: `Основной вид деятельности: ${c.okvedMain.name}`, okpd2: null, origin: 'OKVED' });

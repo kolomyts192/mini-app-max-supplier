@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { CertificateRequirement, SupplierTypePref } from '../domain/types';
+import type { Attribute, CertificateRequirement, SupplierTypePref } from '../domain/types';
 import type { RedisClient } from '../infra/redis';
 
 /** Состояния диалога (раздел 6.1 ТЗ). */
@@ -10,6 +10,7 @@ export type DialogState =
   | 'WAITING_VOLUME'
   | 'WAITING_SUPPLIER_TYPE'
   | 'WAITING_CERTIFICATE'
+  | 'WAITING_ATTRIBUTES'
   | 'QUERY_CONFIRMATION'
   | 'APP_OPENING'
   | 'SEARCHING'
@@ -30,6 +31,13 @@ export interface BotSession {
   wholesale: boolean | null;
   supplier_type: SupplierTypePref | null;
   certificate_requirement: CertificateRequirement | null;
+  /** Характеристики товара: «18 мм», «марка ФСФ». */
+  attributes: Attribute[];
+  /** Слова для поиска по названиям продукции в документах. */
+  terms: string[];
+  /** Уточняющий вопрос о характеристиках из разбора запроса; задаётся один раз и в пределах трёх уточнений. */
+  clarify: string | null;
+  attributes_asked: boolean;
   clarifications_asked: number;
   /** true — пользователь меняет параметры через меню «Изменить параметры». */
   editing: boolean;
@@ -54,6 +62,10 @@ export function newSession(userId: string, chatId: string | null): BotSession {
     wholesale: null,
     supplier_type: null,
     certificate_requirement: null,
+    attributes: [],
+    terms: [],
+    clarify: null,
+    attributes_asked: false,
     clarifications_asked: 0,
     editing: false,
     last_search_token: null,
@@ -69,7 +81,8 @@ export class SessionStore {
   async get(userId: string, chatId: string | null): Promise<BotSession> {
     const raw = await this.redis.get(`sess:${userId}`);
     if (raw) {
-      const s = JSON.parse(raw) as BotSession;
+      // Сессии, сохранённые до появления новых полей, дополняем значениями по умолчанию
+      const s = { ...newSession(userId, chatId), ...(JSON.parse(raw) as BotSession) };
       if (chatId && !s.chat_id) s.chat_id = chatId;
       return s;
     }

@@ -15,6 +15,7 @@ export const CB = {
   VIEW_SAVED: 'VIEW_SAVED',
   NEW_SEARCH: 'NEW_SEARCH',
   APPLY_PATCH: 'APPLY_PATCH',
+  SKIP_ATTRIBUTES: 'SKIP_ATTRIBUTES',
 } as const;
 
 export const cb = (text: string, action: string, arg?: string, intent?: 'default' | 'positive' | 'negative'): Button => ({
@@ -84,6 +85,10 @@ export function certificateKeyboard(): InlineKeyboard {
     [cb('Желательно', CB.SET_CERTIFICATE, 'PREFERRED')],
     [cb('Не важно', CB.SET_CERTIFICATE, 'NOT_REQUIRED')],
   ]);
+}
+
+export function attributesKeyboard(): InlineKeyboard {
+  return keyboard([[cb('Пропустить', CB.SKIP_ATTRIBUTES)]]);
 }
 
 export function volumeKeyboard(): InlineKeyboard {

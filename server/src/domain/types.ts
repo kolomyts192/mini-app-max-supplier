@@ -17,6 +17,21 @@ export const volumeSchema = z.object({
 });
 export type Volume = z.infer<typeof volumeSchema>;
 
+/**
+ * Характеристика товара из запроса: «18 мм», «толщина 18 мм», «марка ФСФ», «ГОСТ 3916.1».
+ * Числовая — value и unit (для размеров через «х» — values), текстовая — text.
+ */
+export const attributeSchema = z.object({
+  /** Подпись: «толщина», «размер», «марка», «стандарт». */
+  name: z.string().trim().min(1).max(40),
+  value: z.number().finite().nullable().default(null),
+  /** Несколько чисел: «150х150», «3х2,5». */
+  values: z.array(z.number().finite()).max(4).default([]),
+  unit: z.string().trim().max(10).nullable().default(null),
+  text: z.string().trim().max(60).nullable().default(null),
+});
+export type Attribute = z.infer<typeof attributeSchema>;
+
 /** Итоговый поисковый запрос — одинаковый для бота, search_token и mini-app. */
 export const searchQuerySchema = z.object({
   text: z.string().trim().max(200).default(''),
@@ -28,6 +43,12 @@ export const searchQuerySchema = z.object({
   volume: volumeSchema.nullable().default(null),
   certificate: z.enum(CERTIFICATE_REQUIREMENTS).default('PREFERRED'),
   russianOnly: z.boolean().default(false),
+  /** Характеристики товара: не исключают компанию, а проверяются по документам и сортируют выдачу. */
+  attributes: z.array(attributeSchema).max(6).default([]),
+  /** Дополнительные слова для поиска по названиям продукции в документах: «фанера», «ФСФ», «берёзовая». */
+  terms: z.array(z.string().trim().min(2).max(40)).max(8).default([]),
+  /** Запрос уже разобран (ботом или ИИ): мини-приложение не разбирает текст повторно. */
+  interpreted: z.boolean().default(false),
 });
 export type SearchQuery = z.infer<typeof searchQuerySchema>;
 

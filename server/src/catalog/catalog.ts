@@ -21,19 +21,26 @@ export interface RequiredDocument {
   hint: string;
 }
 
+export interface OkvedRule {
+  /** Код или группировка ОКВЭД: «20.30» совпадает с 20.30, 20.30.1, 20.30.2… */
+  prefix: string;
+  /** Для широких группировок — уточнение по наименованию кода (регулярное выражение). */
+  name?: string;
+  /**
+   * Для правил товара: код называет именно этот товар («16.21.11 Производство фанеры…»), а не группу товаров
+   * («16.21 Производство шпона, фанеры, деревянных плит и панелей»).
+   */
+  exact?: boolean;
+}
+
 export interface Product {
   id: string;
   name: string;
   normalized: string;
   okpd2: string;
   synonyms: string[];
-}
-
-export interface OkvedRule {
-  /** Код или группировка ОКВЭД: «20.30» совпадает с 20.30, 20.30.1, 20.30.2… */
-  prefix: string;
-  /** Для широких группировок — уточнение по наименованию кода (регулярное выражение). */
-  name?: string;
+  /** По каким основным ОКВЭД компания относится именно к этому товару, а не только к категории. */
+  okvedRules?: OkvedRule[];
 }
 
 export interface Category {

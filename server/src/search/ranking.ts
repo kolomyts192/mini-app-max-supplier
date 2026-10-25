@@ -1,7 +1,8 @@
 import type { Catalog } from '../catalog/catalog';
 import { formatDateRu } from '../catalog/text';
 import { SUPPLIER_TYPE_LABEL, type SearchQuery, type SupplierType } from '../domain/types';
-import type { DerivedFacts } from './facts';
+import { attributeLabel } from './attributes';
+import type { DerivedFacts, ProductBasis } from './facts';
 import type { Reason, SupplierRow } from './model';
 
 /** Веса из раздела 11.2 ТЗ. */
@@ -62,8 +63,43 @@ function supplierTypeScore(type: SupplierType, pref: SearchQuery['supplierType']
   return table[pref][type];
 }
 
+/** Совпадение товара (35 % оценки) по основанию: документ сильнее ОКВЭД, ОКВЭД товара сильнее ОКВЭД группы. */
+const BASIS_SCORE: Record<ProductBasis, number> = {
+  document: 1,
+  declared: 1,
+  catalog: 1,
+  okved_exact: 0.9,
+  // ОКВЭД группы надёжнее говорит «производит этот товар», чем документ, привязанный к товару по слову
+  // («двери… из МДФ» — не производитель плит МДФ)
+  okved_group: 0.8,
+  document_linked: 0.75,
+  okved_text: 0.7,
+  category: 0.6,
+};
+
+/**
+ * Поправка на характеристики запроса: все подтверждены — без изменений, часть — ×0,95, не указаны — ×0,9,
+ * противоречат — ×0,7. Компанию без подтверждения не исключаем: в источниках характеристики указаны редко.
+ */
+export function attributeFactor(checks: DerivedFacts['attributeChecks']): number {
+  if (!checks.length) return 1;
+  if (checks.some((c) => c.status === 'mismatch')) return 0.7;
+  const confirmed = checks.filter((c) => c.status === 'confirmed').length;
+  return confirmed === checks.length ? 1 : confirmed ? 0.95 : 0.9;
+}
+
+export function productMatchScore(f: DerivedFacts, q: SearchQuery): number {
+  if (f.productMatch === 'none') return 0;
+  // ОКВЭД, в названии которого есть слово из запроса («Производство молока…» для «молоко»), — сильнее того же кода без него
+  const named = f.productEvidence?.named && (f.productBasis === 'okved_exact' || f.productBasis === 'okved_group') ? 0.05 : 0;
+  // Документ на изделие из товара («Панели… на основе фанеры») слабее документа на сам товар
+  const material = f.productBasis === 'document' && f.productEvidence?.head === false ? -0.1 : 0;
+  const base = f.productMatch === 'category' && !q.productId ? 0.85 : BASIS_SCORE[f.productBasis] + named + material;
+  return Math.round(base * attributeFactor(f.attributeChecks) * 1000) / 1000;
+}
+
 export function scoreSupplier(s: SupplierRow, f: DerivedFacts, q: SearchQuery, now: Date): { score: number; components: ScoreComponents } {
-  const productMatch = f.productMatch === 'product' ? 1 : f.productMatch === 'category' ? (q.productId ? 0.6 : 0.85) : 0;
+  const productMatch = productMatchScore(f, q);
   const regionMatch = { same: 1, any: 1, neighbor: 0.6, other: 0.2 }[f.regionMatch];
   const supplierTypeMatch = supplierTypeScore(s.supplier_type, q.supplierType);
   const legalVerification = f.legalStatus.value === 'ACTIVE' ? (f.legalStatus.refreshed ? 1 : 0.5) : 0.3;
@@ -112,20 +148,8 @@ const TEST_MARK = ' (тестовые данные)';
 /** Объяснение выдачи (11.3): только проверяемые факты, без оценок «надёжный/ненадёжный». */
 export function buildReasons(s: SupplierRow, f: DerivedFacts, q: SearchQuery, catalog: Catalog): Reason[] {
   const reasons: Reason[] = [];
-  const product = catalog.product(q.productId);
-  const category = catalog.category(q.categoryId);
-
-  if (f.productBasis === 'okved') {
-    reasons.push({ kind: 'ok', text: `совпадает категория «${category?.name}» по основному ОКВЭД` });
-    reasons.push({ kind: 'warn', text: product ? `конкретный товар «${product.name.toLowerCase()}» в источниках не подтверждён` : 'конкретная продукция в источниках не подтверждена' });
-  } else if (f.productMatch === 'product') {
-    const tail = f.productBasis === 'declared' ? ' — заявлено компанией в реестре МСП' : '';
-    reasons.push({ kind: 'ok', text: product ? `есть товар «${product.name.toLowerCase()}»${tail}` : `совпадает товарная категория${tail}` });
-  } else if (f.productMatch === 'category')
-    reasons.push({
-      kind: product ? 'warn' : 'ok',
-      text: product ? `совпадает категория «${category?.name}», но «${product.name.toLowerCase()}» не указан` : 'совпадает товарная категория',
-    });
+  reasons.push(...productReasons(f, q, catalog));
+  reasons.push(...attributeReasons(f));
 
   const region = catalog.region(s.region_code);
   if (f.regionMatch === 'same') reasons.push({ kind: 'ok', text: 'подходит регион' });
@@ -180,4 +204,45 @@ export function buildReasons(s: SupplierRow, f: DerivedFacts, q: SearchQuery, ca
   if (q.volume) reasons.push({ kind: 'warn', text: 'объём поставки не проверяется — уточните у поставщика' });
   reasons.push({ kind: 'warn', text: 'минимальная партия, цена и наличие не подтверждены' });
   return reasons;
+}
+
+const clip = (text: string, max = 140) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
+
+/** Почему товар совпал — с цитатой из документа, заявленной продукции или вида деятельности. */
+function productReasons(f: DerivedFacts, q: SearchQuery, catalog: Catalog): Reason[] {
+  const product = catalog.product(q.productId);
+  const category = catalog.category(q.categoryId);
+  const name = product?.name.toLowerCase();
+  const e = f.productEvidence;
+  const notConfirmed: Reason = { kind: 'warn', text: name ? `конкретная продукция («${name}») документами не подтверждена` : 'конкретная продукция в источниках не подтверждена' };
+  switch (f.productBasis) {
+    case 'document':
+      return [{ kind: 'ok', text: `${e?.ref ?? 'документ'} на товар: «${clip(e?.quote ?? '')}»` }];
+    case 'declared':
+      return [{ kind: 'ok', text: `товар заявлен компанией в реестре МСП: «${clip(e?.quote ?? '')}»` }];
+    case 'catalog':
+      return [{ kind: 'ok', text: name ? `есть товар «${name}»` : 'совпадает товарная категория' }];
+    case 'document_linked':
+      return [{ kind: 'ok', text: `${e?.ref ?? 'документ'} на товар ${name ? `«${name}»` : 'из этой категории'}: «${clip(e?.quote ?? '')}»` }];
+    case 'okved_exact':
+      return [{ kind: 'ok', text: `основной ОКВЭД ${e?.ref} «${clip(e?.quote ?? '', 110)}» — производство этого товара` }, notConfirmed];
+    case 'okved_group':
+      return [{ kind: 'ok', text: `основной ОКВЭД ${e?.ref} «${clip(e?.quote ?? '', 110)}» включает ${name ? `«${name}»` : 'этот товар'}` }, notConfirmed];
+    case 'okved_text':
+      return [{ kind: 'ok', text: `в основном виде деятельности упомянут товар: ${e?.ref} «${clip(e?.quote ?? '', 110)}»` }, notConfirmed];
+    case 'category':
+      if (f.productMatch === 'none') return [];
+      return product
+        ? [{ kind: 'warn', text: `совпадает категория «${category?.name}», но «${name}» в источниках не найден` }]
+        : [{ kind: 'ok', text: `совпадает категория «${category?.name}» по основному ОКВЭД` }];
+  }
+}
+
+/** Характеристики запроса: подтверждено цитатой, противоречит документу или не указано в источниках. */
+function attributeReasons(f: DerivedFacts): Reason[] {
+  return f.attributeChecks.map((c): Reason => {
+    if (c.status === 'confirmed') return { kind: 'ok', text: `${c.label}: «${clip(c.quote ?? '', 100)}»${c.ref ? ` (${c.source === 'okved' ? 'ОКВЭД ' : ''}${c.ref})` : ''}` };
+    if (c.status === 'mismatch') return { kind: 'warn', text: `${c.label}: в документе указано «${clip(c.quote ?? '', 100)}»` };
+    return { kind: 'warn', text: `${attributeLabel(c.attribute)} — в источниках не указано, уточните у поставщика` };
+  });
 }

@@ -68,7 +68,8 @@ export function matchProduct(text: string, catalog: Catalog): ProductMatch[] {
       used.push(found);
     }
     if (!ok) continue;
-    const score = entry.stems.length * 10 + (entry.productId ? 3 : 0) - (fuzzy ? 5 : 0);
+    // Товар конкретнее категории: «кухонная мебель на заказ» — кухонная мебель, а не вся «мебель на заказ»
+    const score = entry.stems.length * 10 + (entry.productId ? 12 : 0) - (fuzzy ? 5 : 0);
     scored.push({ entry, score, fuzzy, used });
   }
 
@@ -207,6 +208,9 @@ export function toSearchQuery(p: ParsedQuery, defaults: Partial<SearchQuery> = {
     volume: p.volume,
     certificate: p.certificate ?? 'PREFERRED',
     russianOnly: false,
+    attributes: [],
+    terms: [],
+    interpreted: true,
     ...defaults,
   };
 }

@@ -1,6 +1,7 @@
 import type { Catalog } from '../catalog/catalog';
 import { plural } from '../catalog/text';
 import { CERTIFICATE_LABEL, SUPPLIER_PREF_LABEL } from '../domain/types';
+import { attributeLabel } from '../search/attributes';
 import type { SearchCounts } from '../search/dto';
 import type { BotSession } from './session';
 
@@ -41,6 +42,7 @@ export const T = {
     if (c.isEstimate) return `В категории ${companies(c.total)}. Проверил ${n(c.evaluated)} лучших совпадений — подходят ${n(c.matched)}. В подборке — ${n(c.shown)} лучших.`;
     return `По вашим параметрам подходят ${companies(c.matched)}. В подборке — ${n(c.shown)} лучших.`;
   },
+  attributesNotRecognized: 'Не разобрал характеристики. Напишите, например: «18 мм, ФСФ» — или нажмите «Пропустить».',
   sourcesDown: 'Часть сведений сейчас недоступна. В подборке показаны результаты по другим источникам.',
 };
 
@@ -54,6 +56,7 @@ export function querySummary(s: BotSession, catalog: Catalog): string {
     const op = { up_to: 'до ', from: 'от ', exact: '' }[s.volume.mode];
     lines.push(`— объём: ${op}${String(s.volume.value).replace('.', ',')} ${unit};`);
   }
+  if (s.attributes?.length) lines.push(`— характеристики: ${s.attributes.map(attributeLabel).join(', ')};`);
   if (s.supplier_type) lines.push(`— тип поставщика: ${SUPPLIER_PREF_LABEL[s.supplier_type]};`);
   if (s.certificate_requirement) lines.push(`— ${CERTIFICATE_LABEL[s.certificate_requirement]};`);
   const last = lines.length - 1;

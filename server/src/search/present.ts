@@ -4,7 +4,7 @@ import { type Provenance, type SearchQuery, SME_LABEL, SUPPLIER_TYPE_LABEL } fro
 import type { SourceRegistry, SourceStatus } from '../sources/registry';
 import type { DocumentRow, RiskRow, VerificationRow } from '../sources/types';
 import type { DocumentDto, RiskDto, SourceRefDto, SupplierCardDto, SupplierSummary } from './dto';
-import { type DerivedDocument, type DerivedFacts, fieldValue, provenanceOf } from './facts';
+import { type DerivedDocument, type DerivedFacts, fieldValue, type ProductBasis, provenanceOf } from './facts';
 import type { Evidence, Reason, SupplierRow } from './model';
 import type { ScoreComponents } from './ranking';
 
@@ -68,6 +68,17 @@ export function rowProvenance(
   );
 }
 
+const BASIS_LABEL: Record<ProductBasis, string> = {
+  document: 'подтверждено документом',
+  declared: 'заявлено компанией',
+  catalog: 'есть в каталоге',
+  document_linked: 'есть документ на товар',
+  okved_exact: 'по ОКВЭД товара',
+  okved_group: 'по ОКВЭД группы товаров',
+  okved_text: 'по виду деятельности',
+  category: 'по категории',
+};
+
 export function documentDto(d: DerivedDocument, catalog: Catalog, now: Date): DocumentDto {
   const r: DocumentRow = d.row;
   return {
@@ -124,6 +135,13 @@ export function toSummary(
     city: s.city,
     regionMatch: f.regionMatch,
     product: { titles: f.matchedProductTitles, match: f.productMatch },
+    match: {
+      basis: f.productBasis,
+      label: BASIS_LABEL[f.productBasis],
+      evidence: f.productEvidence,
+      attributes: f.attributeChecks.map((c) => ({ label: c.label, status: c.status, quote: c.quote, ref: c.ref })),
+      ai: null,
+    },
     legalStatus: { ...f.legalStatus, label: f.legalStatus.detail ? `${LEGAL_LABEL[f.legalStatus.value]}: ${f.legalStatus.detail}` : LEGAL_LABEL[f.legalStatus.value] },
     sme: { ...f.sme, label: SME_LABEL[f.sme.value] },
     gisp: {
