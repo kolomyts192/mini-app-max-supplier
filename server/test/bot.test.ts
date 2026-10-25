@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BotOrchestrator, type BotTransport } from '../src/bot/orchestrator';
 import { SessionStore } from '../src/bot/session';
 import type { MaxUpdate, NewMessageBody } from '../src/max/types';
-import { RuleQueryInterpreter } from '../src/search/interpretation';
+import { type QueryInterpreter, RuleQueryInterpreter } from '../src/search/interpretation';
 import { catalog, FakeRedis, silentLog } from './helpers';
 
 const rules = new RuleQueryInterpreter(catalog);
@@ -13,7 +13,7 @@ interface Sent {
   buttons: { text: string; payload?: string; url?: string }[];
 }
 
-function setup(total = 4) {
+function setup(total = 4, interpreter: QueryInterpreter = rules) {
   const sent: Sent[] = [];
   const transport: BotTransport = {
     async send(_to, body: NewMessageBody) {
@@ -45,7 +45,7 @@ function setup(total = 4) {
       log: silentLog,
       openAppMode: 'link',
       botUsername: () => 'proveren_bot',
-      interpreter: rules,
+      interpreter,
       rules,
     },
     transport,
@@ -176,5 +176,43 @@ describe('честные цифры в боте', () => {
       'В категории 1 694 компании. Проверил 150 лучших совпадений — подходят 37. В подборке — 5 лучших.',
     );
     expect(T.found({ total: 4, evaluated: 4, matched: 4, shown: 4, isEstimate: false })).toBe('По вашим параметрам подходят 4 компании. В подборке — 4 лучших.');
+  });
+});
+
+describe('уточнение характеристик', () => {
+  /** Разбор, как у ИИ: предлагает вопрос о характеристиках, если их нет в запросе. */
+  const withClarify: QueryInterpreter = {
+    async interpret(text) {
+      const r = rules.interpretSync(text);
+      return { ...r, clarify: r.attributes.length ? null : 'Какая толщина и марка фанеры нужны?', source: 'ai', status: 'ok' };
+    },
+  };
+
+  it('вопрос — после региона и типа, ответ попадает в сводку и в поисковый запрос', async () => {
+    const ctx = setup(4, withClarify);
+    await ctx.bot.handle(msg('нужна фанера в Москве, только от производителя'));
+    let m = lastSend(ctx.sent);
+    expect(m.text).toContain('Какая толщина и марка фанеры нужны?');
+    expect(m.buttons.map((b) => b.text)).toEqual(['Пропустить']);
+    await ctx.bot.handle(msg('18 мм, ФСФ'));
+    m = lastSend(ctx.sent);
+    expect(m.text).toContain('— характеристики: 18 мм, марка ФСФ;');
+    await ctx.bot.handle(press('CONFIRM_QUERY', m.text));
+    expect(ctx.searches.at(-1)).toMatchObject({ productId: 'plywood', regionCode: '77', interpreted: true, attributes: [{ value: 18, unit: 'мм' }, { text: 'ФСФ' }] });
+  });
+
+  it('вопрос можно пропустить, и он не повторяется', async () => {
+    const ctx = setup(4, withClarify);
+    await ctx.bot.handle(msg('нужна фанера в Москве, только от производителя'));
+    await ctx.bot.handle(press('SKIP_ATTRIBUTES', lastSend(ctx.sent).text));
+    const m = lastSend(ctx.sent);
+    expect(m.text).not.toContain('толщина');
+    expect(m.buttons.map((b) => b.text)).toEqual(['Подтвердить', 'Изменить параметры']);
+  });
+
+  it('характеристики уже есть в запросе — не спрашивает', async () => {
+    const ctx = setup(4, withClarify);
+    await ctx.bot.handle(msg('фанера ФСФ 18 мм в Москве, только от производителя'));
+    expect(lastSend(ctx.sent).text).toContain('— характеристики: 18 мм, марка ФСФ;');
   });
 });

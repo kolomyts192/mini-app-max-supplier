@@ -73,6 +73,25 @@ export function datesLine(dates: { registryDate: string | null; factsDate: strin
   return fallback ? `Данные на ${formatDate(fallback)}` : 'Нет данных';
 }
 
+/** Подпись характеристики: «18 мм», «толщина 18 мм», «150×150 мм», «марка ФСФ» (как на сервере). */
+export function attributeLabel(a: { name: string; value: number | null; values?: number[]; unit: string | null; text: string | null }): string {
+  if (a.text) return `${a.name} ${a.text}`;
+  const num = (v: number) => v.toLocaleString('ru-RU', { maximumFractionDigits: 3, useGrouping: false });
+  const value = a.values?.length ? a.values.map(num).join('×') : a.value !== null ? num(a.value) : '';
+  const unit = a.unit ? (a.unit === '%' ? '%' : ` ${a.unit}`) : '';
+  return `${['размер', 'значение'].includes(a.name) ? '' : `${a.name} `}${value}${unit}`.trim();
+}
+
+/** Подпись об участии ИИ в выдаче; null — ИИ не подключён или не требовался. */
+export function aiLine(ai: { interpretation: string; ranking: string } | undefined): string | null {
+  if (!ai) return null;
+  const used = (s: string) => s === 'ok' || s === 'cached';
+  if (used(ai.ranking)) return 'Порядок и объяснения уточнены GigaChat по сведениям реестров';
+  if (used(ai.interpretation)) return 'Запрос разобран GigaChat';
+  if (ai.interpretation === 'timeout' || ai.interpretation === 'error' || ai.ranking === 'timeout' || ai.ranking === 'error') return 'GigaChat сейчас не ответил — подбор по правилам';
+  return null;
+}
+
 export function suppliersWord(n: number): string {
   return plural(n, ['поставщик', 'поставщика', 'поставщиков']);
 }

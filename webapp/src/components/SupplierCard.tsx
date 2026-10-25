@@ -1,6 +1,6 @@
 import { AlertTriangle, BadgeCheck, Bookmark, BookmarkCheck, Building2, CheckCircle2, ChevronDown, ChevronUp, Factory, FileCheck2, FileSearch, OctagonX, Scale, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
-import type { SupplierSummary, SupplierType } from '../api/types';
+import type { AttributeStatus, SupplierSummary, SupplierType } from '../api/types';
 import { formatDate } from '../utils';
 import { ReasonList } from './ui';
 
@@ -27,6 +27,44 @@ export function EvidenceBadges({ s, max = 4 }: { s: SupplierSummary; max?: numbe
           {i.text}
         </span>
       ))}
+    </div>
+  );
+}
+
+const ATTRIBUTE_BADGE: Record<AttributeStatus, { cls: string; note: string }> = {
+  confirmed: { cls: 'badge--ok', note: 'подтверждено' },
+  mismatch: { cls: 'badge--danger', note: 'в документе другое' },
+  unknown: { cls: 'badge--warn', note: 'не указано' },
+};
+
+/** Чем подтверждён товар и характеристики запроса; объяснение ИИ — с меткой. */
+export function MatchLine({ s }: { s: SupplierSummary }) {
+  const m = s.match;
+  if (!m) return null;
+  return (
+    <div className="stack-1">
+      {m.basis !== 'category' && (
+        <div className="t-caption">
+          <span className="muted">Совпадение: </span>
+          {m.label}
+          {m.evidence?.ref ? <span className="muted"> · {m.evidence.ref}</span> : null}
+        </div>
+      )}
+      {m.attributes.length > 0 && (
+        <div className="badges" aria-label="Характеристики из запроса">
+          {m.attributes.map((a) => (
+            <span key={a.label} className={`badge ${ATTRIBUTE_BADGE[a.status].cls}`} title={a.quote ?? undefined}>
+              {a.label}: {ATTRIBUTE_BADGE[a.status].note}
+            </span>
+          ))}
+        </div>
+      )}
+      {m.ai && (
+        <div className="t-caption">
+          <span className="ai-mark" title="Объяснение составлено ИИ по сведениям из реестров">ИИ</span>
+          {m.ai.reason}
+        </div>
+      )}
     </div>
   );
 }
@@ -106,6 +144,7 @@ export function SupplierCard({ s, onOpen, onCompare, inCompare, onSave, saved, o
             {s.product.titles.length > 2 ? ` и ещё ${s.product.titles.length - 2}` : ''}
           </div>
         )}
+        <MatchLine s={s} />
         <EvidenceBadges s={s} />
         {s.risks.length > 0 && (
           <div className="status-line status-line--danger" style={{ fontWeight: 500 }}>

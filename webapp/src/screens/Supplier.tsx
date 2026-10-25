@@ -320,6 +320,45 @@ export function SupplierScreen() {
         )}
       </div>
 
+      {s.match && (s.match.basis !== 'category' || s.match.attributes.length > 0) && (
+        <Section title="Совпадение с запросом" id="match">
+          <div className="stack-3">
+            <div>
+              <div className="t-strong">{s.match.label[0].toUpperCase() + s.match.label.slice(1)}</div>
+              {s.match.evidence && (
+                <p className="t-caption match-quote">
+                  «{s.match.evidence.quote}»{s.match.evidence.ref ? ` — ${s.match.evidence.source === 'okved' ? 'ОКВЭД ' : ''}${s.match.evidence.ref}` : ''}
+                </p>
+              )}
+            </div>
+            {s.match.attributes.map((a) => (
+              <div key={a.label}>
+                <div className={`status-line status-line--${a.status === 'confirmed' ? 'ok' : a.status === 'mismatch' ? 'danger' : 'warn'}`}>
+                  {a.label}: {a.status === 'confirmed' ? 'подтверждено' : a.status === 'mismatch' ? 'в документе указано другое' : 'в источниках не указано — уточните у поставщика'}
+                </div>
+                {a.quote && (
+                  <p className="t-caption match-quote">
+                    «{a.quote}»{a.ref ? ` — ${a.ref}` : ''}
+                  </p>
+                )}
+              </div>
+            ))}
+            {s.match.ai && (
+              <div>
+                <div className="t-caption">
+                  <span className="ai-mark">ИИ</span>
+                  {s.match.ai.reason}
+                </div>
+                <p className="t-caption match-quote">«{s.match.ai.quote}»</p>
+                <p className="t-caption muted" style={{ margin: '4px 0 0' }}>
+                  Объяснение составлено GigaChat только по сведениям из реестров; цитата проверена.
+                </p>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       <Section title="Почему в подборке" tone="sky" id="why">
         <ReasonList reasons={s.reasons} />
       </Section>

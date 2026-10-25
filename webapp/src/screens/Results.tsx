@@ -1,4 +1,4 @@
-import { BookmarkCheck, BookmarkPlus, Scale } from 'lucide-react';
+import { BookmarkCheck, BookmarkPlus, Scale, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError, api, NetworkError } from '../api/client';
@@ -9,7 +9,7 @@ import { SourceProgress, SourcesSheet } from '../components/sheets';
 import { SupplierCard } from '../components/SupplierCard';
 import { Button, CardSkeleton, Chip, Notice, StateView, StickyActionBar } from '../components/ui';
 import { decodeQuery, encodeQuery, MAX_COMPARE, queryKey, useApp } from '../store';
-import { countsLine, datesLine, suppliersWord } from '../utils';
+import { aiLine, attributeLabel, countsLine, datesLine, suppliersWord } from '../utils';
 
 const MIN_LOADING_MS = 1200;
 
@@ -128,7 +128,8 @@ export function ResultsScreen() {
   if (!query || !catalog) return null;
 
   const patch = (p: Partial<SearchQuery>) => {
-    const next = { ...query, ...p };
+    // Меняем уже разобранный запрос: характеристики из текста не теряются при переключении фильтров
+    const next = { ...(data?.query ?? query), ...p };
     void api.event('filters_changed', data?.searchId ?? null, { patch: Object.keys(p) });
     replaceForm(next);
     navigate(`/results?${encodeQuery(next)}`, { replace: true });
@@ -220,6 +221,8 @@ export function ResultsScreen() {
   }
 
   const failed = data.sources.filter((s) => s.status === 'failed');
+  const attributes = data.query.attributes ?? [];
+  const ai = aiLine(data.ai);
   const label = data.queryLabel;
   const withBar = data.results.length > 0;
 
@@ -248,12 +251,33 @@ export function ResultsScreen() {
 
       <div style={{ marginTop: 8 }}>{quickFilters}</div>
 
+      {attributes.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="t-caption muted">Характеристики из запроса — проверяем по документам, нажмите, чтобы убрать</div>
+          <div className="chips chips--scroll" role="group" aria-label="Характеристики из запроса" style={{ marginTop: 4 }}>
+            {attributes.map((a, i) => (
+              <Chip key={attributeLabel(a)} className="chip chip--removable" onClick={() => patch({ attributes: attributes.filter((_, j) => j !== i) })} aria-label={`Убрать «${attributeLabel(a)}»`}>
+                {attributeLabel(a)}
+                <X size={14} strokeWidth={2} aria-hidden />
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="t-caption muted num" style={{ marginTop: 8 }}>
         {data.results.length ? countsLine(data.counts) : 'Ничего не подошло'}
         {' · '}
         {label.supplierType}
         <br />
         {datesLine(data.dates, data.demo ? data.dataDate : null)}
+        {ai && (
+          <>
+            <br />
+            <span className="ai-mark">ИИ</span>
+            {ai}
+          </>
+        )}
       </div>
 
       <div className="stack-3" style={{ marginTop: 16 }}>

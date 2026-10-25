@@ -10,6 +10,15 @@ export interface Volume {
   operator: 'lte' | 'gte' | 'eq';
 }
 
+/** Характеристика товара из запроса: «18 мм», «толщина 18 мм», «марка ФСФ». */
+export interface Attribute {
+  name: string;
+  value: number | null;
+  values: number[];
+  unit: string | null;
+  text: string | null;
+}
+
 export interface SearchQuery {
   text: string;
   productId: string | null;
@@ -20,6 +29,11 @@ export interface SearchQuery {
   volume: Volume | null;
   certificate: CertificateRequirement;
   russianOnly: boolean;
+  /** Характеристики проверяются по документам и сортируют выдачу, но не исключают компанию. */
+  attributes?: Attribute[];
+  terms?: string[];
+  /** Запрос уже разобран (ботом или ИИ): сервер не разбирает текст повторно. */
+  interpreted?: boolean;
 }
 
 export interface Provenance {
@@ -46,7 +60,23 @@ export type NotedFact = Fact<string | null> & { notes: string | null };
 export interface Reason {
   kind: 'ok' | 'warn' | 'info';
   text: string;
+  /** ai — объяснение составлено ИИ по сведениям из реестров. */
+  source?: 'ai';
 }
+
+export type AttributeStatus = 'confirmed' | 'mismatch' | 'unknown';
+
+/** Совпадение с запросом: основание, доказательство, характеристики и оценка ИИ. */
+export interface MatchInfo {
+  basis: string;
+  label: string;
+  evidence: { quote: string; ref: string | null; source: 'document' | 'declared' | 'okved' } | null;
+  attributes: { label: string; status: AttributeStatus; quote: string | null; ref: string | null }[];
+  ai: { relevance: number; reason: string; quote: string } | null;
+}
+
+/** ok/cached — с ИИ; disabled/timeout/error — без ИИ; skipped — не требовалось. */
+export type AiStepStatus = 'ok' | 'cached' | 'disabled' | 'timeout' | 'error' | 'skipped';
 
 export interface DocumentDto {
   type: 'CERTIFICATE' | 'DECLARATION';
@@ -98,6 +128,7 @@ export interface SupplierSummary {
   city: string | null;
   regionMatch: 'same' | 'neighbor' | 'other' | 'any';
   product: { titles: string[]; match: 'product' | 'category' | 'none' };
+  match: MatchInfo;
   legalStatus: Fact<'ACTIVE' | 'INACTIVE' | 'UNKNOWN'> & { label: string; refreshed: boolean };
   sme: Fact<string> & { label: string; refreshed: boolean };
   gisp: { found: boolean; records: number; pp719: boolean; provenance: Provenance | null };
@@ -142,6 +173,7 @@ export interface SearchResponse {
   counts: SearchCounts;
   /** registryDate — версия реестра МСП, factsDate — налоговых наборов ФНС (YYYY-MM-DD). */
   dates: { registryDate: string | null; factsDate: string | null };
+  ai: { interpretation: AiStepStatus; ranking: AiStepStatus };
   results: SupplierSummary[];
   dataDate: string | null;
   sources: SourceStatus[];
@@ -316,4 +348,7 @@ export const EMPTY_QUERY: SearchQuery = {
   volume: null,
   certificate: 'PREFERRED',
   russianOnly: false,
+  attributes: [],
+  terms: [],
+  interpreted: false,
 };

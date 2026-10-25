@@ -1671,3 +1671,29 @@ textarea.input {
   gap: var(--space-4);
   margin-top: var(--space-5);
 }
+
+/* Метка объяснения, составленного ИИ по сведениям из реестров */
+.ai-mark {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  color: var(--blue-text);
+  background: var(--blue-tint);
+  vertical-align: 1px;
+}
+
+.chip--removable {
+  gap: 6px;
+}
+
+.match-quote {
+  margin: 4px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-secondary);
+}

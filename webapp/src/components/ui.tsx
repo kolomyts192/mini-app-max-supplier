@@ -191,7 +191,10 @@ export function ReasonList({ reasons, limit }: { reasons: Reason[]; limit?: numb
       {shown.map((r, i) => (
         <li key={i} className={`reason--${r.kind}`}>
           {r.kind === 'ok' ? <CheckCircle2 size={18} strokeWidth={1.75} aria-label="подтверждено" /> : r.kind === 'warn' ? <AlertTriangle size={18} strokeWidth={1.75} aria-label="внимание" /> : <Info size={18} strokeWidth={1.75} aria-hidden />}
-          <span>{r.text}</span>
+          <span>
+            {r.source === 'ai' && <span className="ai-mark" title="Объяснение составлено ИИ по сведениям из реестров">ИИ</span>}
+            {r.source === 'ai' ? r.text.replace(/^оценка ИИ:\s*/, '') : r.text}
+          </span>
         </li>
       ))}
     </ul>
