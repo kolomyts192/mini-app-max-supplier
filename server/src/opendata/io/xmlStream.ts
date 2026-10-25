@@ -8,11 +8,18 @@ function decodeEntities(v: string): string {
   return v.includes('&') ? v.replace(/&(quot|amp|lt|gt|apos);|&#(\d+);/g, (m, _n, code) => (code ? String.fromCharCode(Number(code)) : ENTITIES[m] ?? m)) : v;
 }
 
+/**
+ * Копия строки без ссылки на родителя. V8 хранит подстроку длиннее 12 символов как срез исходной строки,
+ * поэтому одно сохранённое название из XML удерживает в памяти весь прочитанный кусок файла: на 200 тыс.
+ * компаний реестра это гигабайты. Конкатенация с последующим срезом заставляет V8 скопировать символы.
+ */
+export const detach = (s: string): string => (s.length > 12 ? (' ' + s).slice(1) : s);
+
 export function parseAttrs(tagBody: string): Record<string, string> {
   const out: Record<string, string> = {};
   const re = /([^\s=/]+)\s*=\s*"([^"]*)"/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(tagBody))) out[m[1]] = decodeEntities(m[2]);
+  while ((m = re.exec(tagBody))) out[m[1]] = detach(decodeEntities(m[2]));
   return out;
 }
 
@@ -93,7 +100,8 @@ export async function streamElements(stream: Readable, tag: string, onDoc: (xml:
     for (;;) {
       const start = buf.indexOf(open, pos);
       if (start < 0) {
-        pos = buf.length;
+        // Хвост может оказаться началом тега, разрезанного границей куска («<Доку» + «мент …»): его не выбрасываем
+        pos = Math.max(pos, buf.length - open.length + 1);
         break;
       }
       const end = buf.indexOf(close, start);

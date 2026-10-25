@@ -4,7 +4,8 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { Logger } from '../../logger';
 import { sleep } from '../../sources/resilience';
-import { ZipVerifier } from './zipVerifier';
+import { ChunkedDownload, type RemoteFile } from './chunkedDownload';
+import { type ZipCheck, ZipVerifier } from './zipVerifier';
 
 const UA = 'proveren-postavshik/1.0 (+open data import)';
 
@@ -24,11 +25,8 @@ export const DEFAULT_MIRRORS: readonly { from: string; to: string }[] = [
   { from: 'https://www.nalog.gov.ru/opendata/', to: 'https://file.nalog.ru/opendata/' },
 ];
 
-interface RemoteFile {
-  url: string;
-  size: number;
-  resumable: boolean;
-}
+/** Сколько раз перекачивать повреждённые фрагменты, найденные проверкой CRC32. */
+const REPAIR_ROUNDS = 3;
 
 export interface DownloaderOptions {
   attempts?: number;
@@ -38,8 +36,9 @@ export interface DownloaderOptions {
 }
 
 /**
- * Загрузка наборов открытых данных: версия из паспорта, выбор зеркала, потоковая запись с докачкой (Range)
- * и повторами. Готовый файл повторно не скачивается.
+ * Загрузка наборов открытых данных: версия из паспорта, выбор зеркала, загрузка фрагментами через Range
+ * (или потоком, если сервер не поддерживает Range), проверка ZIP по CRC32 с перекачкой повреждённых фрагментов.
+ * Готовый проверенный файл повторно не скачивается.
  */
 export class DatasetDownloader {
   private readonly attempts: number;
@@ -110,6 +109,33 @@ export class DatasetDownloader {
       fs.renameSync(dest, `${dest}.broken`);
     }
     const part = `${dest}.part`;
+    if (remote.resumable) await this.downloadChunked(remote, part);
+    else await this.downloadStream(remote, part);
+    fs.renameSync(part, dest);
+    fs.renameSync(`${part}.verified`, `${dest}.verified`);
+    this.log.info({ file: name, url: remote.url }, 'download complete');
+    return dest;
+  }
+
+  /** Фрагментами по Range; повреждённые по CRC32 файлы архива перекачиваются только своими фрагментами. */
+  private async downloadChunked(remote: RemoteFile, part: string): Promise<void> {
+    const chunked = new ChunkedDownload(remote, part, this.log);
+    for (let round = 1; round <= REPAIR_ROUNDS; round++) {
+      await chunked.run();
+      const check = await this.check(part);
+      if (!check || check.ok) {
+        chunked.finish();
+        return;
+      }
+      const chunks = chunked.invalidate(check.brokenRanges);
+      this.log.warn({ file: path.basename(part, '.part'), round, chunks, of: chunked.chunks }, 're-downloading damaged chunks');
+    }
+    throw new Error(`Архив ${path.basename(part, '.part')} повреждён и после перекачки фрагментов`);
+  }
+
+  /** Одним потоком с докачкой — для серверов без Range (докачка тогда начинается с нуля). */
+  private async downloadStream(remote: RemoteFile, part: string): Promise<void> {
+    const name = path.basename(part, '.part');
     for (let attempt = 1; attempt <= this.attempts; attempt++) {
       try {
         await this.fetchInto(remote, part);
@@ -118,38 +144,37 @@ export class DatasetDownloader {
           fs.rmSync(part);
           throw new Error('архив повреждён: не сошлись контрольные суммы, скачиваю заново');
         }
-        fs.renameSync(part, dest);
-        fs.renameSync(`${part}.verified`, `${dest}.verified`);
-        this.log.info({ file: name, url: remote.url }, 'download complete');
-        return dest;
+        return;
       } catch (err) {
         const have = fs.existsSync(part) ? fs.statSync(part).size : 0;
-        this.log.warn({ file: name, attempt, mb: Math.round(have / 1048576), resumable: remote.resumable, err: (err as Error).message }, 'download failed, retrying');
+        this.log.warn({ file: name, attempt, mb: Math.round(have / 1048576), err: (err as Error).message }, 'download failed, retrying');
         await sleep(Math.min(60_000, 2000 * 2 ** attempt));
       }
     }
-    throw new Error(`Не удалось скачать ${url}`);
+    throw new Error(`Не удалось скачать ${remote.url}`);
   }
 
   /**
-   * Целостность ZIP по CRC32. Проверенный файл помечается <файл>.verified с его размером,
-   * чтобы повторная загрузка не распаковывала гигабайты заново.
+   * Проверка ZIP по CRC32. null — проверять не нужно (не ZIP, проверка выключена или файл этого размера
+   * уже проверен: отметка <файл>.verified, чтобы не распаковывать гигабайты при каждой загрузке).
    */
-  private async intact(file: string): Promise<boolean> {
+  private async check(file: string): Promise<ZipCheck | null> {
     const marker = `${file}.verified`;
     const size = String(fs.statSync(file).size);
     if (!this.verifier || !/\.zip(\.part)?$/i.test(file)) {
       fs.writeFileSync(marker, size);
-      return true;
+      return null;
     }
-    if (fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === size) return true;
+    if (fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === size) return null;
     const check = await this.verifier.check(file);
-    if (!check.ok) {
-      this.log.warn({ file: path.basename(file), entries: check.entries, broken: check.broken.length, sample: check.broken.slice(0, 3) }, 'zip archive is corrupted');
-      return false;
-    }
-    fs.writeFileSync(marker, size);
-    return true;
+    if (check.ok) fs.writeFileSync(marker, size);
+    else this.log.warn({ file: path.basename(file), entries: check.entries, broken: check.broken.length, sample: check.broken.slice(0, 3) }, 'zip archive is corrupted');
+    return check;
+  }
+
+  private async intact(file: string): Promise<boolean> {
+    const check = await this.check(file);
+    return !check || check.ok;
   }
 
   /** Первое зеркало, которое отдаёт файл с докачкой; иначе исходная ссылка. */

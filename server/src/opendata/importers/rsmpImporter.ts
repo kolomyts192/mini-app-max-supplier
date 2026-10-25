@@ -87,7 +87,8 @@ export class RsmpImporter implements DatasetImporter {
         }
       });
       if (stats.files % 500 === 0) {
-        this.d.log.info({ files: stats.files, documents: stats.total, companies: stats.companies.size, quarantined: quarantine.count, sec: secondsSince(started) }, 'rsmp import progress');
+        const heapMb = Math.round(process.memoryUsage().heapUsed / 1048576);
+        this.d.log.info({ files: stats.files, documents: stats.total, companies: stats.companies.size, quarantined: quarantine.count, heapMb, sec: secondsSince(started) }, 'rsmp import progress');
       }
     });
     await this.flush(batch, meta, stats);

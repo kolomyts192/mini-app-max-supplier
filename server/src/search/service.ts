@@ -29,8 +29,8 @@ export interface OpenDataImport {
 
 export const MAX_RESULTS = 5;
 
-/** Источники налоговых наборов ФНС: их версия — «дата налоговых сведений» в выдаче. */
-const FACT_SOURCES = new Set(['FNS_PB', 'FNS_REVEXP', 'SME_SUPPORT']);
+/** Налоговые наборы ФНС и отчётность: их версия — «дата налоговых сведений» в выдаче (реестр поддержки МСП — не налоги). */
+const FACT_SOURCES = new Set(['FNS_PB', 'FNS_REVEXP']);
 
 /** Дата реестра МСП и самая свежая дата налоговых наборов из журнала импорта. */
 export function searchDates(imports: OpenDataImport[]): SearchDates {

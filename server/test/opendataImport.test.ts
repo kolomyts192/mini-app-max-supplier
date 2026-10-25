@@ -219,6 +219,14 @@ describe('координатор импорта', () => {
     expect(step.calls).toBe(1);
   });
 
+  it('ошибка служебного шага попадает в отчёт, а не обрывает запуск', async () => {
+    const broken: PostImportStep = { name: 'VACUUM', run: async () => { throw new Error('No space left on device'); } };
+    const run = await new ImportCoordinator([new StubImporter('sshr', 'enrichment', 'ok')], [broken, step], silentLog).run(new ImportRun('test'));
+    expect(run.failed).toBe(true);
+    expect(run.report().markdown).toContain('**ошибка** VACUUM');
+    expect(step.calls).toBe(2);
+  });
+
   it('ошибка реестра МСП останавливает запуск', async () => {
     const next = new StubImporter('sshr', 'enrichment', 'ok');
     const run = await new ImportCoordinator([new StubImporter('rsmp', 'registry', 'fail'), next], [], silentLog).run(new ImportRun('test'));
@@ -256,7 +264,7 @@ describe('выбор этапов и загрузка', () => {
 
   it('архив проверяется по CRC32: испорченный байт находится, даже если размер совпал', async () => {
     const good = path.resolve(__dirname, 'fixtures/debtam.zip');
-    expect(await new ZipVerifier().check(good)).toEqual({ ok: true, entries: 1, broken: [] });
+    expect(await new ZipVerifier().check(good)).toEqual({ ok: true, entries: 1, broken: [], brokenRanges: [] });
     const bad = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'od-')), 'debtam.zip');
     const bytes = fs.readFileSync(good);
     bytes[120] ^= 0xff;
@@ -264,6 +272,7 @@ describe('выбор этапов и загрузка', () => {
     const check = await new ZipVerifier().check(bad);
     expect(check.ok).toBe(false);
     expect(check.broken).toEqual(['VO_DEBTAM_0001.xml']);
+    expect(check.brokenRanges[0][0]).toBe(0);
   });
 
   it('карантин считает все записи, а хранит ограниченно и с обрезанным фрагментом', () => {
@@ -282,5 +291,15 @@ describe('выбор этапов и загрузка', () => {
     expect(TransactionRunner.isTransient({ code: 'ECONNRESET' })).toBe(true);
     expect(TransactionRunner.isTransient(new Error('Connection terminated unexpectedly'))).toBe(true);
     expect(TransactionRunner.isTransient({ code: '23505' })).toBe(false);
+  });
+});
+
+describe('даты в выдаче', () => {
+  it('дата реестра МСП и самая свежая дата налоговых наборов; реестр поддержки МСП налогами не считается', async () => {
+    const { searchDates } = await import('../src/search/service');
+    const imp = (dataset: string, source: string, dataDate: string) => ({ dataset, source, title: dataset, dataDate, rowsMatched: 1 });
+    expect(searchDates([imp('rsmp', 'SME_REGISTRY', '2026-10-10'), imp('sshr', 'FNS_PB', '2026-09-25'), imp('paytax', 'FNS_PB', '2026-04-01'), imp('rsmppp', 'SME_SUPPORT', '2026-10-15')]))
+      .toEqual({ registryDate: '2026-10-10', factsDate: '2026-09-25' });
+    expect(searchDates([])).toEqual({ registryDate: null, factsDate: null });
   });
 });

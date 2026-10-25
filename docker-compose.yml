@@ -3,6 +3,8 @@ name: proveren-postavshik
 services:
   postgres:
     image: postgres:16-alpine
+    # По умолчанию Docker даёт 64 МБ /dev/shm — параллельным запросам по базе в 200 тыс. компаний этого мало
+    shm_size: 256mb
     environment:
       POSTGRES_USER: supplier
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supplier}

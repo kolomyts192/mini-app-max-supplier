@@ -85,7 +85,8 @@ export class RsmpAnalyzer {
       await streamElements(stream, 'Документ', (doc) => {
         a.documents += 1;
         if (progressEvery > 0 && a.documents % progressEvery === 0) {
-          this.log.info({ documents: a.documents, matched: a.matchedDocuments, companies: seenInn.size, sec: Math.round((Date.now() - started) / 1000) }, 'rsmp analysis progress');
+          const heapMb = Math.round(process.memoryUsage().heapUsed / 1048576);
+          this.log.info({ documents: a.documents, matched: a.matchedDocuments, companies: seenInn.size, heapMb, sec: Math.round((Date.now() - started) / 1000) }, 'rsmp analysis progress');
         }
         if (/ИНН(?:ЮЛ|ФЛ)="\d+"/.test(doc) && /<СведМН[^>]*КодРегион="\d{2}"/.test(doc)) a.documentsWithInnAndRegion += 1;
         if (doc.includes('<СвПрод')) a.documentsWithDeclared += 1;

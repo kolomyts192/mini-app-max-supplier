@@ -67,10 +67,17 @@ export class ImportCoordinator {
     }
 
     if (run.succeeded) {
+      // Ошибка служебного шага не отменяет загруженные данные: фиксируем её в отчёте и продолжаем
       for (const step of this.postSteps) {
         const started = Date.now();
-        const details = await step.run();
-        run.addStep({ name: step.name, elapsedSec: Math.round((Date.now() - started) / 1000), details });
+        const elapsed = () => Math.round((Date.now() - started) / 1000);
+        try {
+          const details = await step.run();
+          run.addStep({ name: step.name, ok: true, elapsedSec: elapsed(), details });
+        } catch (err) {
+          run.addStep({ name: step.name, ok: false, elapsedSec: elapsed(), details: { error: (err as Error).message } });
+          this.log.error({ step: step.name, err: (err as Error).message }, 'post-import step failed');
+        }
       }
     }
     run.finish();

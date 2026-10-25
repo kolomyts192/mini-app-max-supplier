@@ -86,7 +86,7 @@ export interface SearchCounts {
 export interface SearchDates {
   /** Версия реестра МСП, по которой собрана база, YYYY-MM-DD. */
   registryDate: string | null;
-  /** Самая свежая версия налоговых наборов ФНС (численность, спецрежимы, задолженность…), YYYY-MM-DD. */
+  /** Самая свежая версия налоговых наборов ФНС и отчётности (численность, спецрежимы, задолженность…), YYYY-MM-DD. */
   factsDate: string | null;
 }
 

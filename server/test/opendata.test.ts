@@ -42,6 +42,16 @@ describe('xml', () => {
     expect(n).toBe(3);
     expect(docs[1]).toContain('ИННФЛ="253910730844"');
   });
+
+  it('ни один документ не теряется, где бы ни прошла граница куска — в том числе посреди «<Документ»', async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><Файл>${PAINT_ORG}${AD_AGENCY_IP}${DECLARED}</Файл>`;
+    const buf = Buffer.from(xml, 'utf8');
+    for (let cut = 1; cut < buf.length; cut++) {
+      const docs: string[] = [];
+      await streamElements(Readable.from([buf.subarray(0, cut), buf.subarray(cut)]), 'Документ', (d) => void docs.push(d));
+      expect(docs.map((d) => tagAttrs(d, 'Документ')?.ИдДок), `разрез на байте ${cut}`).toEqual(['1', '2', '3']);
+    }
+  });
 });
 
 describe('реестр МСП → поставщики', () => {

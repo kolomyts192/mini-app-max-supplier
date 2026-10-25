@@ -4,6 +4,7 @@ import type { Report } from './io/reportStore';
 /** Итог служебного шага после импорта: пересчёт признаков, статистика БД. */
 export interface PostStepResult {
   name: string;
+  ok: boolean;
   elapsedSec: number;
   details: Record<string, unknown>;
 }
@@ -42,7 +43,7 @@ export class ImportRun {
   }
 
   get failed(): boolean {
-    return this.stageResults.some((r) => r.status === 'failed');
+    return this.stageResults.some((r) => r.status === 'failed') || this.stepResults.some((s) => !s.ok);
   }
 
   get succeeded(): boolean {
@@ -75,7 +76,7 @@ export class ImportRun {
       ...this.stageResults.map((r) => `| ${r.stage} | ${r.title} | ${STATUS_LABEL[r.status]} | ${r.dataDate ?? '—'} | ${n(r.rowsTotal)} | ${n(r.rowsMatched)} | ${n(r.written)} | ${n(r.quarantined)} | ${r.elapsedSec} |`),
       '',
       ...(notes.length ? ['## Замечания', '', ...notes.map((r) => `- ${r.stage}: ${r.message}`), ''] : []),
-      ...(this.stepResults.length ? ['## После импорта', '', ...this.stepResults.map((s) => `- ${s.name} (${s.elapsedSec} с): ${JSON.stringify(s.details)}`), ''] : []),
+      ...(this.stepResults.length ? ['## После импорта', '', ...this.stepResults.map((s) => `- ${s.ok ? '' : '**ошибка** '}${s.name} (${s.elapsedSec} с): ${JSON.stringify(s.details)}`), ''] : []),
     ].join('\n');
     return { json, markdown };
   }

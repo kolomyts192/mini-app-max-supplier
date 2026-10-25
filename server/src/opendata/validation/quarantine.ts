@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { detach } from '../io/xmlStream';
 
 export interface QuarantineEntry {
   reason: string;
@@ -24,7 +25,7 @@ export class Quarantine {
   add(reason: string, inn: string | null, payload: string): void {
     this.total += 1;
     this.byReason.set(reason, (this.byReason.get(reason) ?? 0) + 1);
-    if (this.kept.length < KEEP_ENTRIES) this.kept.push({ reason, inn: inn || null, payload: payload.slice(0, PAYLOAD_LIMIT) });
+    if (this.kept.length < KEEP_ENTRIES) this.kept.push({ reason, inn: inn || null, payload: detach(payload.slice(0, PAYLOAD_LIMIT)) });
   }
 
   get count(): number {
