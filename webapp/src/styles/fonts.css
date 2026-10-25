@@ -1,0 +1,24 @@
+/* Bebas Neue (2014, FontFabric) — версия с кириллицей. Только заголовки и крупные числа. */
+@font-face {
+  font-family: 'Bebas Neue';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('../assets/fonts/bebas-neue-300.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Bebas Neue';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/bebas-neue-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Bebas Neue';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/bebas-neue-700.woff2') format('woff2');
+}

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#F4F2FF" />
+    <title>Проверенный поставщик</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='8' fill='%231927FC'/%3E%3Cpath d='M10 16.5l4 4 8-9' fill='none' stroke='%23F4F2FF' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <script>
+      // Тема до отрисовки: по умолчанию светлая, тёмная — только если пользователь выбрал её переключателем
+      (function () {
+        var t = 'light';
+        try {
+          if (localStorage.getItem('pp_theme') === 'dark') t = 'dark';
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t);
+        if (t === 'dark') {
+          document.querySelector('meta[name="color-scheme"]').setAttribute('content', 'dark');
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0B111B');
+        }
+      })();
+    </script>
+    <!-- MAX Bridge: window.WebApp. В обычном браузере приложение работает в демо-режиме -->
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

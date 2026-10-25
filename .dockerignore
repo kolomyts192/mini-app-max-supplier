@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+.env
+.env.*
+TO DO
+backups
+opendata-cache
+.git
+*.log
+*.zip
